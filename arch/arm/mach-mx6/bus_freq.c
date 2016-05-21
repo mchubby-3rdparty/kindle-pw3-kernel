@@ -195,7 +195,9 @@ void reduce_bus_freq(void)
 			while( ! lock_iram_page("iram ddr code",
                                     mx6sl_ddr_va, mx6sl_ddr_pa, mx6sl_ddr_attr))
 									;;
+#ifdef CONFIG_IMX2_WDT
 			wdg_prep();
+#endif
 			mx6sl_ddr_freq_change_iram(DDR_AUDIO_CLK, low_bus_freq_mode);
 		
 			spin_unlock_irqrestore(&freq_lock, flags);
@@ -246,7 +248,9 @@ void reduce_bus_freq(void)
 			while( ! lock_iram_page("iram ddr code",
                                     mx6sl_ddr_va, mx6sl_ddr_pa, mx6sl_ddr_attr))
 									;;
+#ifdef CONFIG_IMX2_WDT
 			wdg_prep();
+#endif
 
 			/* Now change DDR freq while running from IRAM.*/
 			mx6sl_ddr_freq_change_iram(LPAPM_CLK,low_bus_freq_mode);
@@ -353,7 +357,9 @@ int set_high_bus_freq(int high_bus_freq)
 		while( ! lock_iram_page("iram ddr code",
                                     mx6sl_ddr_va, mx6sl_ddr_pa, mx6sl_ddr_attr))
 									;;
+#ifdef CONFIG_IMX2_WDT
 		wdg_prep();
+#endif
 
 		/* Change DDR freq in IRAM. */
 		mx6sl_ddr_freq_change_iram(ddr_normal_rate, low_bus_freq_mode);

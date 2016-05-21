@@ -10,6 +10,7 @@
 #include <asm/io.h>
 #include "include/iomux_define.h"
 #include "include/iomux_register.h"
+#include <mach/boardid.h>
 
 // Function to config iomux for instance audmux.
 void audmux_iomux_config(void)
@@ -35,7 +36,12 @@ void audmux_iomux_config(void)
     //     ALT5 (5) - Select mux mode: ALT5 mux port: GPIO[1] of instance: gpio1.
     //     ALT6 (6) - Select mux mode: ALT6 mux port: SS1 of instance: ecspi3.
     //                NOTE: - Config Register IOMUXC_ECSPI3_IPP_IND_SS_B_1_SELECT_INPUT for mode ALT6.
-    __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_AUD_RXC));
+    if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+        lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+        __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT5 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_AUD_RXC));
+    } else {
+        __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_AUD_RXC));
+    }
     // Pad Control Register:
     // IOMUXC_SW_PAD_CTL_PAD_AUD_RXC(0x020E02A8)
     //   LVE (22) - Low Voltage Enable Field Reset: LVE_DISABLED
@@ -84,10 +90,16 @@ void audmux_iomux_config(void)
     //             Select one out of next values for pad: AUD_RXC.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+    if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+        lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+           (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+           (SPD_50MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), (IOMUXC_SW_PAD_CTL_PAD_AUD_RXC));
+    } else {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
            (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
            (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_FAST & 0x1), (IOMUXC_SW_PAD_CTL_PAD_AUD_RXC));
-
+    }
     // Config audmux.AUD3_RXD to pad AUD_RXD(J20)
     // Mux Register:
     // IOMUXC_SW_MUX_CTL_PAD_AUD_RXD(0x020E0054)
@@ -107,7 +119,12 @@ void audmux_iomux_config(void)
     //     ALT4 (4) - Select mux mode: ALT4 mux port: LCTL of instance: usdhc1.
     //     ALT5 (5) - Select mux mode: ALT5 mux port: GPIO[2] of instance: gpio1.
     //     ALT6 (6) - Select mux mode: ALT6 mux port: INT_BOOT of instance: src.
-    __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_AUD_RXD));
+    if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+        lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+        __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT5 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_AUD_RXD));
+    } else {
+        __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_AUD_RXD));
+    }
     // Pad Control Register:
     // IOMUXC_SW_PAD_CTL_PAD_AUD_RXD(0x020E02AC)
     //   LVE (22) - Low Voltage Enable Field Reset: LVE_DISABLED
@@ -156,10 +173,16 @@ void audmux_iomux_config(void)
     //             Select one out of next values for pad: AUD_RXD.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+    if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+        lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+           (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+           (SPD_50MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), (IOMUXC_SW_PAD_CTL_PAD_AUD_RXD));
+    } else {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
            (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
            (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_FAST & 0x1), (IOMUXC_SW_PAD_CTL_PAD_AUD_RXD));
-
+    }
     // Config audmux.AUD3_RXFS to pad AUD_RXFS(J19)
     // Mux Register:
     // IOMUXC_SW_MUX_CTL_PAD_AUD_RXFS(0x020E0058)
@@ -181,7 +204,13 @@ void audmux_iomux_config(void)
     //     ALT5 (5) - Select mux mode: ALT5 mux port: GPIO[0] of instance: gpio1.
     //     ALT6 (6) - Select mux mode: ALT6 mux port: SS0 of instance: ecspi3.
     //                NOTE: - Config Register IOMUXC_ECSPI3_IPP_IND_SS_B_0_SELECT_INPUT for mode ALT6.
-    __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_AUD_RXFS));
+    
+    if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+        lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+        __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT5 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_AUD_RXFS));
+    } else {
+        __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_AUD_RXFS));
+    }
     // Pad Control Register:
     // IOMUXC_SW_PAD_CTL_PAD_AUD_RXFS(0x020E02B0)
     //   LVE (22) - Low Voltage Enable Field Reset: LVE_DISABLED
@@ -230,10 +259,16 @@ void audmux_iomux_config(void)
     //             Select one out of next values for pad: AUD_RXFS.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+    if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+        lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+           (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+           (SPD_50MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), (IOMUXC_SW_PAD_CTL_PAD_AUD_RXFS));
+    } else {
+		__raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
            (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
            (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_FAST & 0x1), (IOMUXC_SW_PAD_CTL_PAD_AUD_RXFS));
-
+    }
     // Config audmux.AUD3_TXC to pad AUD_TXC(H20)
     // Mux Register:
     // IOMUXC_SW_MUX_CTL_PAD_AUD_TXC(0x020E005C)
@@ -253,7 +288,12 @@ void audmux_iomux_config(void)
     //     ALT4 (4) - Select mux mode: ALT4 mux port: LCTL of instance: usdhc2.
     //     ALT5 (5) - Select mux mode: ALT5 mux port: GPIO[3] of instance: gpio1.
     //     ALT6 (6) - Select mux mode: ALT6 mux port: SYSTEM_RST of instance: src.
-    __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_AUD_TXC));
+    if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+        lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+        __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT5 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_AUD_TXC));
+    } else {
+        __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_AUD_TXC));
+    }
     // Pad Control Register:
     // IOMUXC_SW_PAD_CTL_PAD_AUD_TXC(0x020E02B4)
     //   LVE (22) - Low Voltage Enable Field Reset: LVE_DISABLED
@@ -302,10 +342,16 @@ void audmux_iomux_config(void)
     //             Select one out of next values for pad: AUD_TXC.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+    if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+        lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {    
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+           (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+           (SPD_50MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), (IOMUXC_SW_PAD_CTL_PAD_AUD_TXC));
+    } else {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
            (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
            (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_FAST & 0x1), (IOMUXC_SW_PAD_CTL_PAD_AUD_TXC));
-
+    }
     // Config audmux.AUD3_TXD to pad AUD_TXD(J22)
     // Mux Register:
     // IOMUXC_SW_MUX_CTL_PAD_AUD_TXD(0x020E0060)
@@ -323,7 +369,13 @@ void audmux_iomux_config(void)
     //     ALT3 (3) - Select mux mode: ALT3 mux port: TDATA[0] of instance: fec.
     //     ALT4 (4) - Select mux mode: ALT4 mux port: LCTL of instance: usdhc4.
     //     ALT5 (5) - Select mux mode: ALT5 mux port: GPIO[5] of instance: gpio1.
-    __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_AUD_TXD));
+    
+    if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+        lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+        __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT5 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_AUD_TXD));
+    } else {
+        __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_AUD_TXD));
+    }
     // Pad Control Register:
     // IOMUXC_SW_PAD_CTL_PAD_AUD_TXD(0x020E02B8)
     //   LVE (22) - Low Voltage Enable Field Reset: LVE_DISABLED
@@ -372,10 +424,16 @@ void audmux_iomux_config(void)
     //             Select one out of next values for pad: AUD_TXD.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+    if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+        lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+           (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+           (SPD_50MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), (IOMUXC_SW_PAD_CTL_PAD_AUD_TXD));
+    } else {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
            (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
            (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_FAST & 0x1), (IOMUXC_SW_PAD_CTL_PAD_AUD_TXD));
-
+    }
     // Config audmux.AUD3_TXFS to pad AUD_TXFS(H21)
     // Mux Register:
     // IOMUXC_SW_MUX_CTL_PAD_AUD_TXFS(0x020E0064)
@@ -393,7 +451,12 @@ void audmux_iomux_config(void)
     //                NOTE: - Config Register IOMUXC_FEC_FEC_RDATA_1_SELECT_INPUT for mode ALT3.
     //     ALT4 (4) - Select mux mode: ALT4 mux port: LCTL of instance: usdhc3.
     //     ALT5 (5) - Select mux mode: ALT5 mux port: GPIO[4] of instance: gpio1.
-    __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_AUD_TXFS));
+    if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+        lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+        __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT5 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_AUD_TXFS));
+    } else {
+        __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_AUD_TXFS));
+    }
     // Pad Control Register:
     // IOMUXC_SW_PAD_CTL_PAD_AUD_TXFS(0x020E02BC)
     //   LVE (22) - Low Voltage Enable Field Reset: LVE_DISABLED
@@ -442,10 +505,16 @@ void audmux_iomux_config(void)
     //             Select one out of next values for pad: AUD_TXFS.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+    if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+        lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+           (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+           (SPD_50MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), (IOMUXC_SW_PAD_CTL_PAD_AUD_TXFS));
+    } else {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
            (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
            (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_FAST & 0x1), (IOMUXC_SW_PAD_CTL_PAD_AUD_TXFS));
-
+    }
     // Config audmux.AUDIO_MCLK to pad AUD_MCLK(H19)
     // WAS Instance:audmux Signal:AUDIO_CLK_OUT
     // Mux Register:
@@ -465,7 +534,12 @@ void audmux_iomux_config(void)
     //     ALT5 (5) - Select mux mode: ALT5 mux port: GPIO[6] of instance: gpio1.
     //     ALT6 (6) - Select mux mode: ALT6 mux port: SPDIF_EXT_CLK of instance: spdif.
     //                NOTE: - Config Register IOMUXC_SPDIF_TX_CLK2_SELECT_INPUT for mode ALT6.
-    __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_AUD_MCLK));
+    if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+        lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+        __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT5 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_AUD_MCLK));
+    } else {
+        __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_AUD_MCLK));
+    }
     // Pad Control Register:
     // IOMUXC_SW_PAD_CTL_PAD_AUD_MCLK(0x020E02A4)
     //   LVE (22) - Low Voltage Enable Field Reset: LVE_DISABLED
@@ -514,7 +588,14 @@ void audmux_iomux_config(void)
     //             Select one out of next values for pad: AUD_MCLK.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+    if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+        lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+           (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+           (SPD_50MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), (IOMUXC_SW_PAD_CTL_PAD_AUD_MCLK));
+    } else {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
            (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
            (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_FAST & 0x1), (IOMUXC_SW_PAD_CTL_PAD_AUD_MCLK));
+    }
 }

@@ -25,8 +25,12 @@
 #include <linux/zlib.h>
 #include <linux/vmalloc.h>
 #include <linux/einkwf.h>
+#include <mach/boardid.h>
 
 static int override_panel_settings = 0;
+#define DISPLAY_UP_RIGHT   ( lab126_board_is(BOARD_ID_WOODY) || \
+                              lab126_board_is(BOARD_ID_WHISKY_WAN) || \
+                              lab126_board_is(BOARD_ID_WHISKY_WFO) )
 
 #ifdef DEVELOPMENT_MODE
 /*
@@ -129,6 +133,7 @@ struct update_modes {
 	struct update_mode glr;
 	struct update_mode glrd;
 	struct update_mode gldk;
+	struct update_mode glr4;
 };
 
 struct panel_addrs {
@@ -952,7 +957,8 @@ struct update_modes panel_mode_00 = {
 		.gl4  = { .mode = 7, .name = "gl4" },
 		.glr  = { .mode = 4, .name = "reagl" },
 		.glrd = { .mode = 5, .name = "reagld" },
-		.gldk = { .mode = 8, .name = "gldk" },
+		.gldk = { .mode = 3, .name = "gldk" },
+		.glr4 = { .mode = 8, .name = "reagl4" },
 
 };
 
@@ -969,6 +975,7 @@ struct update_modes panel_mode_07 = {
 		.glr  = { .mode = 6, .name = "gl16_fast" },
 		.glrd = { .mode = 3, .name = "gc16_fast" },
 		.gldk = { .mode = 3, .name = "gc16_fast" },
+		.glr4 = { .mode = 6, .name = "gl16_fast" },
 };
 
 struct update_modes panel_mode_18 = {
@@ -984,6 +991,7 @@ struct update_modes panel_mode_18 = {
 		.glr  = { .mode = 6, .name = "gl16_fast" },
 		.glrd = { .mode = 3, .name = "gc16_fast" },
 		.gldk = { .mode = 3, .name = "gc16_fast" },
+		.glr4 = { .mode = 6, .name = "gl16_fast" },
 };
 
 struct update_modes panel_mode_19 = {
@@ -999,6 +1007,7 @@ struct update_modes panel_mode_19 = {
 		.glr  = { .mode = 3, .name = "gl16_fast" },
 		.glrd = { .mode = 2, .name = "gc16_fast" },
 		.gldk = { .mode = 2, .name = "gc16_fast" },
+		.glr4 = { .mode = 3, .name = "gl16_fast" },
 };
 
 struct update_modes panel_mode_24 = {
@@ -1014,6 +1023,7 @@ struct update_modes panel_mode_24 = {
 		.glr  = { .mode = 4, .name = "reagl" },
 		.glrd = { .mode = 5, .name = "reagld" },
 		.gldk = { .mode = 2, .name = "gc16_fast" },
+		.glr4 = { .mode = 4, .name = "reagl" },
 };
 
 struct update_modes panel_mode_25 = {
@@ -1029,6 +1039,7 @@ struct update_modes panel_mode_25 = {
 		.glr  = { .mode = 4, .name = "reagl" },
 		.glrd = { .mode = 5, .name = "reagld" },
 		.gldk = { .mode = 2, .name = "gc16_fast" },
+		.glr4 = { .mode = 4, .name = "reagl" },
 };
 
 struct panel_addrs waveform_addrs_WJ = {
@@ -1192,6 +1203,7 @@ char * wfm_name_for_mode(struct mxc_epdc_fb_data *fb_data, int mode)
 	if (mode == wf_upd_modes->glrd.mode) return wf_upd_modes->glrd.name;
 	if (mode == wf_upd_modes->gldk.mode) return wf_upd_modes->gldk.name;
 	if (mode == wf_upd_modes->gl4.mode)  return wf_upd_modes->gl4.name;
+	if (mode == wf_upd_modes->glr4.mode) return wf_upd_modes->glr4.name;
 	if (mode == WAVEFORM_MODE_AUTO)      return "auto";
 	return NULL;
 }
@@ -1355,7 +1367,23 @@ static int proc_wfm_source_read(char *page, char **start, off_t off, int count, 
 	return result;
 }
 
+static int proc_working_buffer_read(char *page, char **start, off_t off, int count, int *eof, void *data)
+{
+	size_t buffer_size = g_fb_data->working_buffer_size;
+	size_t ret_len = min((off_t)buffer_size - off, (off_t)count);
 
+	*start = page;
+
+	if (off < buffer_size) {
+		*eof = 0;
+		memcpy(page, ((char *)(g_fb_data->working_buffer_A_virt))+off, ret_len);
+
+		return ret_len;
+	} else {
+		*eof = 1;
+		return 0;
+	}
+}
 
 
 /******************************************************************************
@@ -1468,6 +1496,66 @@ struct fbmode_override fbmode_overrides[] = {
 	},
 	{
 		.barcode_prefix = "EEB",
+		.vmode_index = PANEL_MODE_ED060TC1_3CE_CARTA_1_2,
+		.vddh = 25000,
+		.lve = 1
+	},
+	{
+		.barcode_prefix = "EGS",
+		.vmode_index = PANEL_MODE_ED060TC1_3CE_CARTA_1_2,
+		.vddh = 25000,
+		.lve = 1
+	},
+	{
+		.barcode_prefix = "EJJ",
+		.vmode_index = PANEL_MODE_ED060TC1_3CE_CARTA_1_2,
+		.vddh = 25000,
+		.lve = 1
+	},
+	{
+		.barcode_prefix = "EJK",
+		.vmode_index = PANEL_MODE_ED060TC1_3CE_CARTA_1_2,
+		.vddh = 25000,
+		.lve = 1
+	},
+	{
+		.barcode_prefix = "EJL",
+		.vmode_index = PANEL_MODE_ED060TC1_3CE_CARTA_1_2,
+		.vddh = 25000,
+		.lve = 1
+	},
+	{
+		.barcode_prefix = "EJM",
+		.vmode_index = PANEL_MODE_ED060TC1_3CE_CARTA_1_2,
+		.vddh = 25000,
+		.lve = 1
+	},
+	{
+		.barcode_prefix = "EJN",
+		.vmode_index = PANEL_MODE_ED060TC1_3CE_CARTA_1_2,
+		.vddh = 25000,
+		.lve = 1
+	},
+	{
+		.barcode_prefix = "EJQ",
+		.vmode_index = PANEL_MODE_ED060TC1_3CE_CARTA_1_2,
+		.vddh = 25000,
+		.lve = 1
+	},
+	{
+		.barcode_prefix = "EJR",
+		.vmode_index = PANEL_MODE_ED060TC1_3CE_CARTA_1_2,
+		.vddh = 25000,
+		.lve = 1
+	},
+	{
+		.barcode_prefix = "EJS",
+		.vmode_index = PANEL_MODE_ED060TC1_3CE_CARTA_1_2,
+		.vddh = 25000,
+		.lve = 1
+	},
+	{
+		.barcode_prefix = "EJT",
 		.vmode_index = PANEL_MODE_ED060TC1_3CE_CARTA_1_2,
 		.vddh = 25000,
 		.lve = 1
@@ -3079,6 +3167,7 @@ static struct wf_proc_dir_entry panel_proc_entries[] = {
 	{ "data", S_IWUGO | S_IRUGO, proc_panel_data_read, proc_panel_data_write, NULL },
 	{ "bcd", S_IRUGO, proc_panel_bcd_read, NULL, NULL },
 	{ "id", S_IRUGO, proc_panel_id_read, NULL, NULL },
+	{ "working_buffer", S_IRUGO, proc_working_buffer_read, NULL, NULL},
 };
 
 static struct wf_proc_dir_entry panel_wfm_proc_entries[] = {
@@ -3149,12 +3238,14 @@ int mxc_epdc_do_panel_init(struct mxc_epdc_fb_data *fb_data)
 	tmpvar.bits_per_pixel = 8;
 	tmpvar.grayscale = GRAYSCALE_8BIT;
 	tmpvar.activate = FB_ACTIVATE_FORCE | FB_ACTIVATE_NOW | FB_ACTIVATE_ALL;
-	fb_set_var(&(fb_data->info), &tmpvar);
 
 	// Say that we want to switch to portrait mode.
 	//
-	tmpvar.rotate = FB_ROTATE_CCW;
-
+	if(DISPLAY_UP_RIGHT) {
+		tmpvar.rotate = FB_ROTATE_UR;
+	} else {
+		tmpvar.rotate = FB_ROTATE_CCW;
+	}
 	tmpvar.activate = FB_ACTIVATE_FORCE | FB_ACTIVATE_NOW | FB_ACTIVATE_ALL;
 	fb_set_var(&(fb_data->info), &tmpvar);
 	return 0;

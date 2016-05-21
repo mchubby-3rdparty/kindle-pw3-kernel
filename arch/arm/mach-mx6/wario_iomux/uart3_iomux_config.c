@@ -10,6 +10,7 @@
 #include <asm/io.h>
 #include "include/iomux_define.h"
 #include "include/iomux_register.h"
+#include <mach/boardid.h>
 
 // Function to config iomux for instance uart3.
 void uart3_iomux_config(void)
@@ -43,7 +44,10 @@ void uart3_iomux_config(void)
     //     SEL_ECSPI2_SS0_ALT2 (1) - Selecting Pad: ECSPI2_SS0 for Mode: ALT2.
     //     SEL_EPDC_BDR0_ALT2 (2) - Selecting Pad: EPDC_BDR0 for Mode: ALT2.
     //     SEL_EPDC_BDR1_ALT2 (3) - Selecting Pad: EPDC_BDR1 for Mode: ALT2.
-    __raw_writel((SEL_ECSPI2_MISO_ALT2 & 0x3), IOMUXC_UART3_IPP_UART_RTS_B_SELECT_INPUT);
+    if(!lab126_board_is(BOARD_ID_WHISKY_WFO) &&
+	    !lab126_board_is(BOARD_ID_WHISKY_WAN) &&
+	    !lab126_board_is(BOARD_ID_WOODY))
+        __raw_writel((SEL_ECSPI2_MISO_ALT2 & 0x3), IOMUXC_UART3_IPP_UART_RTS_B_SELECT_INPUT);
     // Pad Control Register:
     // IOMUXC_SW_PAD_CTL_PAD_EPDC_BDR1(0x020E037C)
     //   LVE (22) - Low Voltage Enable Field Reset: LVE_DISABLED
@@ -125,7 +129,13 @@ void uart3_iomux_config(void)
     //     SEL_ECSPI2_SS0_ALT2 (1) - Selecting Pad: ECSPI2_SS0 for Mode: ALT2.
     //     SEL_EPDC_BDR0_ALT2 (2) - Selecting Pad: EPDC_BDR0 for Mode: ALT2.
     //     SEL_EPDC_BDR1_ALT2 (3) - Selecting Pad: EPDC_BDR1 for Mode: ALT2.
-    __raw_writel((SEL_ECSPI2_MISO_ALT2 & 0x3), IOMUXC_UART3_IPP_UART_RTS_B_SELECT_INPUT);
+    if(lab126_board_is(BOARD_ID_WHISKY_WFO) ||
+	    lab126_board_is(BOARD_ID_WHISKY_WAN) ||
+	    lab126_board_is(BOARD_ID_WOODY)) {
+        __raw_writel((SEL_EPDC_BDR0_ALT2 & 0x3), IOMUXC_UART3_IPP_UART_RTS_B_SELECT_INPUT);
+    } else {
+        __raw_writel((SEL_ECSPI2_MISO_ALT2 & 0x3), IOMUXC_UART3_IPP_UART_RTS_B_SELECT_INPUT);
+    }
     // Pad Control Register:
     // IOMUXC_SW_PAD_CTL_PAD_EPDC_BDR0(0x020E0378)
     //   LVE (22) - Low Voltage Enable Field Reset: LVE_DISABLED
@@ -209,7 +219,13 @@ void uart3_iomux_config(void)
     //     SEL_ECSPI2_SCLK_ALT2 (3) - Selecting Pad: ECSPI2_SCLK for Mode: ALT2.
     //     SEL_EPDC_VCOM0_ALT2 (4) - Selecting Pad: EPDC_VCOM0 for Mode: ALT2.
     //     SEL_EPDC_VCOM1_ALT2 (5) - Selecting Pad: EPDC_VCOM1 for Mode: ALT2.
-    __raw_writel((SEL_AUD_RXC_ALT2 & 0x7), IOMUXC_UART3_IPP_UART_RXD_MUX_SELECT_INPUT);
+    if(lab126_board_is(BOARD_ID_WHISKY_WFO) ||
+	    lab126_board_is(BOARD_ID_WHISKY_WAN) ||
+	    lab126_board_is(BOARD_ID_WOODY)) {
+        __raw_writel((SEL_EPDC_VCOM0_ALT2 & 0x7), IOMUXC_UART3_IPP_UART_RXD_MUX_SELECT_INPUT);
+    } else {
+        __raw_writel((SEL_AUD_RXC_ALT2 & 0x7), IOMUXC_UART3_IPP_UART_RXD_MUX_SELECT_INPUT);
+    }
     // Pad Control Register:
     // IOMUXC_SW_PAD_CTL_PAD_EPDC_VCOM0(0x020E0410)
     //   LVE (22) - Low Voltage Enable Field Reset: LVE_DISABLED
@@ -293,7 +309,11 @@ void uart3_iomux_config(void)
     //     SEL_ECSPI2_SCLK_ALT2 (3) - Selecting Pad: ECSPI2_SCLK for Mode: ALT2.
     //     SEL_EPDC_VCOM0_ALT2 (4) - Selecting Pad: EPDC_VCOM0 for Mode: ALT2.
     //     SEL_EPDC_VCOM1_ALT2 (5) - Selecting Pad: EPDC_VCOM1 for Mode: ALT2.
-    __raw_writel((SEL_AUD_RXC_ALT2 & 0x7), IOMUXC_UART3_IPP_UART_RXD_MUX_SELECT_INPUT);
+    if(!lab126_board_is(BOARD_ID_WHISKY_WFO) &&
+	    !lab126_board_is(BOARD_ID_WHISKY_WAN) &&
+	    !lab126_board_is(BOARD_ID_WOODY))
+        __raw_writel((SEL_AUD_RXC_ALT2 & 0x7), IOMUXC_UART3_IPP_UART_RXD_MUX_SELECT_INPUT);
+    
     // Pad Control Register:
     // IOMUXC_SW_PAD_CTL_PAD_EPDC_VCOM1(0x020E0414)
     //   LVE (22) - Low Voltage Enable Field Reset: LVE_DISABLED

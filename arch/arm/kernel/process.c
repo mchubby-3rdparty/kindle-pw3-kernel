@@ -141,6 +141,9 @@ void arm_machine_restart(char mode, const char *cmd)
 void (*pm_power_off)(void);
 EXPORT_SYMBOL(pm_power_off);
 
+void (*pm_power_hibernate)(void);
+EXPORT_SYMBOL(pm_power_hibernate);
+
 void (*arm_pm_restart)(char str, const char *cmd) = arm_machine_restart;
 EXPORT_SYMBOL_GPL(arm_pm_restart);
 
@@ -247,11 +250,23 @@ void machine_shutdown(void)
 
 void machine_halt(void)
 {
+#if 0
 	machine_power_off();
+#else 
+	/* TODO: 
+	 *		halt modified to support PMIC Full Shutdown (FSHDN instead of FSENT) for hibernate evaluation & HW diagnostics
+	 * 		to be reverted once we got hibernate scripts 
+	 */
+	printk(KERN_CRIT "halt - pmic FSHDN\n");
+	machine_shutdown();
+	if (pm_power_hibernate)
+		pm_power_hibernate();
+#endif
 }
 
 void machine_power_off(void)
 {
+	printk(KERN_CRIT "poweroff - pmic FSENT\n");
 	machine_shutdown();
 	if (pm_power_off)
 		pm_power_off();

@@ -22,13 +22,13 @@ dir /dev/fb 0755 0 0
 nod /dev/fb/0 0660 0 0 c 29 0
 slink /dev/fb0 /dev/fb/0 0660 0 0
 
-nod /dev/mmcblk0 0660 0 0 b 179 0
-nod /dev/mmcblk0p1 0660 0 0 b 179 1
-nod /dev/mmcblk0p2 0660 0 0 b 179 2
-nod /dev/mmcblk0p3 0660 0 0 b 179 3
-nod /dev/mmcblk0p4 0660 0 0 b 179 4
-nod /dev/mmcblk0boot0 0660 0 0 b 179 8
-nod /dev/mmcblk0boot1 0660 0 0 b 179 16
+nod /dev/mmcblk0 0660 0 0 b BLKMAJOR 0
+nod /dev/mmcblk0p1 0660 0 0 b BLKMAJOR 1
+nod /dev/mmcblk0p2 0660 0 0 b BLKMAJOR 2
+nod /dev/mmcblk0p3 0660 0 0 b BLKMAJOR 3
+nod /dev/mmcblk0p4 0660 0 0 b BLKMAJOR 4
+nod /dev/mmcblk0boot0 0660 0 0 b BLKMAJOR BLKMINOR1
+nod /dev/mmcblk0boot1 0660 0 0 b BLKMAJOR BLKMINOR2
 
 nod /dev/loop0 0660 0 0 b 7 0
 nod /dev/loop1 0660 0 0 b 7 1
@@ -63,6 +63,11 @@ dir /mnt/wfm 0755 0 0
 # usb gadget drivers
 file /lib/modules/arcotg_udc.ko /initrd/initramfs/lib/arcotg_udc.ko 0755 0 0
 file /lib/modules/g_file_storage.ko /initrd/initramfs/lib/g_file_storage.ko 0755 0 0
+file /lib/modules/fsl_otg_arc.ko /initrd/initramfs/lib/fsl_otg_arc.ko 0755 0 0
+file /lib/modules/ehci-hcd.ko /initrd/initramfs/lib/ehci-hcd.ko 0755 0 0
+
+# soda
+file /lib/modules/soda_device.ko /initrd/initramfs/lib/soda_device.ko 0755 0 0
 
 # eink driver
 file /lib/modules/mxc_epdc_eink.ko /initrd/initramfs/lib/mxc_epdc_eink.ko 0755 0 0

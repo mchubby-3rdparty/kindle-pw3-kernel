@@ -42,11 +42,16 @@
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 
+#ifdef CONFIG_LAB126
+#include <linux/fsl_devices.h>
+#endif
+
 #include <asm/byteorder.h>
 #include <asm/io.h>
 #include <asm/irq.h>
 #include <asm/system.h>
 #include <asm/unaligned.h>
+#include <mach/boardid.h>
 
 #ifdef CONFIG_LAB126
 static struct regulator *phyreg = NULL;
@@ -255,9 +260,11 @@ static int handshake_on_error_set_halt(struct ehci_hcd *ehci, void __iomem *ptr,
 
 	error = handshake(ehci, ptr, mask, done, usec);
 	if (error) {
+#ifndef CONFIG_LAB126
 		ehci_halt(ehci);
 		ehci_to_hcd(ehci)->state = HC_STATE_HALT;
-		ehci_err(ehci, "force halt; handshake %p %08x %08x -> %d\n",
+#endif
+		ehci_err(ehci, "force halt (just kidding); handshake %p %08x %08x -> %d\n",
 			ptr, mask, done, error);
 	}
 
@@ -332,10 +339,14 @@ static void ehci_quiesce (struct ehci_hcd *ehci)
 	/* wait for any schedule enables/disables to take effect */
 	temp = ehci_readl(ehci, &ehci->regs->command) << 10;
 	temp &= STS_ASS | STS_PSS;
+#ifndef CONFIG_LAB126
 	if (handshake_on_error_set_halt(ehci, &ehci->regs->status,
 					STS_ASS | STS_PSS, temp, 16 * 125))
 		return;
-
+#else
+	handshake_on_error_set_halt(ehci, &ehci->regs->status,
+					STS_ASS | STS_PSS, temp, 32 * 125);
+#endif
 	/* then disable anything that's still active */
 	temp = ehci_readl(ehci, &ehci->regs->command);
 	temp &= ~(CMD_ASE | CMD_IAAD | CMD_PSE);
@@ -343,7 +354,7 @@ static void ehci_quiesce (struct ehci_hcd *ehci)
 
 	/* hardware can take 16 microframes to turn off ... */
 	handshake_on_error_set_halt(ehci, &ehci->regs->status,
-				    STS_ASS | STS_PSS, 0, 16 * 125);
+				    STS_ASS | STS_PSS, 0, 32 * 125);
 }
 
 /*-------------------------------------------------------------------------*/
@@ -368,8 +379,6 @@ static void ehci_work(struct ehci_hcd *ehci);
 #ifdef CONFIG_LAB126
 
 #define PORT_WAKE_BITS	(PORT_WKOC_E|PORT_WKDISC_E|PORT_WKCONN_E)
-
-extern atomic_t suspended;
 
 static int ehci_idle_bus_resume (struct usb_hcd *hcd)
 {
@@ -525,9 +534,14 @@ static void ehci_iaa_watchdog(unsigned long param)
 	spin_lock_irqsave (&ehci->lock, flags);
 
 #ifdef CONFIG_LAB126
-	if (atomic_read(&suspended) == 1) {
-		spin_unlock_irqrestore(&ehci->lock, flags);
-		return;
+	{
+		struct usb_hcd *hcd = ehci_to_hcd(ehci);
+		struct fsl_usb2_platform_data *pdata = hcd->self.controller->platform_data;
+
+		if (atomic_read(&pdata->idle_suspended) == 1) {
+			spin_unlock_irqrestore(&ehci->lock, flags);
+			return;
+		}
 	}
 #endif /* CONFIG_LAB126 */
 
@@ -581,9 +595,14 @@ static void ehci_watchdog(unsigned long param)
 	spin_lock_irqsave(&ehci->lock, flags);
 
 #ifdef CONFIG_LAB126
-	if (atomic_read(&suspended) == 1) {
-		spin_unlock_irqrestore (&ehci->lock, flags);
-		return;
+	{
+		struct usb_hcd *hcd = ehci_to_hcd(ehci);
+		struct fsl_usb2_platform_data *pdata = hcd->self.controller->platform_data;
+
+		if (atomic_read(&pdata->idle_suspended) == 1) {
+			spin_unlock_irqrestore (&ehci->lock, flags);
+			return;
+		}
 	}
 #endif /* CONFIG_LAB126 */
 
@@ -1561,17 +1580,19 @@ static int __init ehci_hcd_init(void)
 #endif
 
 #ifdef CONFIG_LAB126
-	phyreg = regulator_get(NULL, "WAN_USB_HOST_PHY");
-	if (IS_ERR(phyreg)) {
-		printk(KERN_ERR "Error cannot get WAN_USB_HOST_PHY regulator \n");
-		retval = EINVAL;
-		goto err_reg_get;
-	}
+	if(LAB126_BOARD_HAS_WAN) {
+		phyreg = regulator_get(NULL, "WAN_USB_HOST_PHY");
+		if (IS_ERR(phyreg)) {
+			printk(KERN_ERR "Error cannot get WAN_USB_HOST_PHY regulator \n");
+			retval = EINVAL;
+			goto err_reg_get;
+		}
 
-	retval = regulator_enable(phyreg);
-	if (retval < 0) {
-		printk(KERN_ERR "Error failed to enable WAN_USB_HOST_PHY regulator \n");
-		goto err_reg_en;
+		retval = regulator_enable(phyreg);
+		if (retval < 0) {
+			printk(KERN_ERR "Error failed to enable WAN_USB_HOST_PHY regulator \n");
+			goto err_reg_en;
+		}
 	}
 #endif
 
@@ -1664,8 +1685,10 @@ static void __exit ehci_hcd_cleanup(void)
 #endif
 	clear_bit(USB_EHCI_LOADED, &usb_hcds_loaded);
 #ifdef CONFIG_LAB126
-	regulator_disable(phyreg);
-	regulator_put(phyreg);
+	if(LAB126_BOARD_HAS_WAN) {
+		regulator_disable(phyreg);
+		regulator_put(phyreg);
+	}
 #endif
 }
 module_exit(ehci_hcd_cleanup);

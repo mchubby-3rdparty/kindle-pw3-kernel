@@ -50,6 +50,13 @@ obj-m                           += pkt_monitor.o
 mwan-objs                       := mwan_wario.o
 endif
 
+ifneq ($(CONFIG_WARIO_WOODY_WAN),)
+obj-y                           += mwan-core.o
+obj-m                           += mwan.o
+obj-m                           += pkt_monitor.o
+mwan-objs                       := mwan_wario_woody.o
+endif
+
 clean-files := wanxlfw.inc
 $(obj)/wanxl.o:	$(obj)/wanxlfw.inc
 

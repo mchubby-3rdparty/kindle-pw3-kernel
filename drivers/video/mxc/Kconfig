@@ -103,12 +103,23 @@ config FB_MXC_EINK_PANEL
 	select FB_DEFERRED_IO
 	tristate "E-Ink Panel Framebuffer"
 
-config FB_MXC_EINK_REAGL
-	tristate "E-Ink REAGL Algorithm"
-
 config FB_MXC_EINK_WORK_BUFFER_B
 	bool "Enable use of working buffer B"
 	default n
+
+config FB_MXC_EINK_WORK_BUFFER_RESERVED
+	bool "Pre-define size/location of working buffer"
+	default n
+
+config FB_MXC_EINK_WORK_BUFFER_ADDR
+	depends on FB_MXC_EINK_WORK_BUFFER_RESERVED
+	hex "Address of working buffer"
+	default 0x9F000000
+
+config FB_MXC_EINK_WORK_BUFFER_SIZE
+	depends on FB_MXC_EINK_WORK_BUFFER_RESERVED
+	hex "Size of working buffer"
+	default 0x00400000
 
 config FB_MXC_EINK_AUTO_UPDATE_MODE
     bool "E-Ink Auto-update Mode Support"

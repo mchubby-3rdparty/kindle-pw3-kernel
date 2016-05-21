@@ -1,5 +1,5 @@
 /*
- * Copyright 2012 Amazon.com, Inc. All rights reserved.
+ * Copyright 2012-2015 Amazon.com, Inc. All rights reserved.
  */
 /*
  * The code contained herein is licensed under the GNU General Public
@@ -10,9 +10,9 @@
  * http://www.gnu.org/copyleft/gpl.html
  */
 
- /*
-  * Wario GPIO file for dynamic gpio configuration
-  */
+/*
+ * Wario GPIO file for dynamic gpio configuration
+ */
 
 #include <linux/errno.h>
 #include <linux/gpio.h>
@@ -20,14 +20,21 @@
 #include <linux/mutex.h>
 #include <linux/completion.h>
 #include <linux/fsl_devices.h>
+#include <linux/power/soda_device.h>
 
 #include <mach/boardid.h>
 #include "board-mx6sl_wario.h"
 #include "wario_iomux/include/iomux_define.h"
 #include "wario_iomux/include/iomux_register.h"
+
+#ifdef CONFIG_POWER_SODA
+#include <linux/power_supply.h>
+#endif
 extern void usdhc2_iomux_config(void );
 
+#if defined(CONFIG_MX6SL_WARIO_BASE)
 static int gpio_wan_ldo_en = 0;
+#endif
 
 int gpio_max44009_als_int(void)
 {
@@ -63,13 +70,43 @@ int gpio_accelerometer_int2(void)
 }
 EXPORT_SYMBOL(gpio_accelerometer_int2);
 
+#ifdef CONFIG_WARIO_HALL
 int gpio_hallsensor_irq(void)
 {
 	return gpio_to_irq(MX6_WARIO_HALL_SNS);
 }
 EXPORT_SYMBOL(gpio_hallsensor_irq);
+#endif
 
 /* proximity sensor related */
+
+#if defined(CONFIG_INPUT_SX9500) || defined(CONFIG_INPUT_SX9500_MODULE)
+int sx9500_gpio_init(void)
+{
+	int ret = 0;
+
+	ret = gpio_request(GPIO_SX9500_NIRQ, "SX9500_NIRQ");
+	if (ret) {
+		printk(KERN_ERR "Could not obtain gpio for SX9500_NIRQ\n");
+		return ret;
+	}
+	
+	ret = gpio_direction_input(GPIO_SX9500_NIRQ);
+	if (ret) {
+		printk(KERN_ERR "Failed to set SX9500_NIRQ GPIO as input\n");
+		gpio_free(GPIO_SX9500_NIRQ);
+	}
+
+	return ret;
+}
+EXPORT_SYMBOL(sx9500_gpio_init);
+
+int sx9500_gpio_proximity_int(void)
+{
+	return gpio_to_irq(GPIO_SX9500_NIRQ);
+}
+EXPORT_SYMBOL(sx9500_gpio_proximity_int);
+#else
 
 int wario_prox_gpio_init(void)
 {
@@ -118,6 +155,7 @@ void gpio_proximity_reset(void)
 	msleep(10);
 }
 EXPORT_SYMBOL(gpio_proximity_reset);
+#endif
 
 void wario_fsr_init_pins(void)
 {
@@ -133,9 +171,9 @@ void wario_fsr_init_pins(void)
 		gpio_direction_output(MX6SL_PIN_KEY_COL1, 1);
 	}
 	else if (lab126_board_is(BOARD_ID_ICEWINE_WARIO) ||
-		lab126_board_is(BOARD_ID_ICEWINE_WFO_WARIO) ||
-		lab126_board_is(BOARD_ID_ICEWINE_WARIO_512) ||
-		lab126_board_is(BOARD_ID_ICEWINE_WFO_WARIO_512))
+			lab126_board_is(BOARD_ID_ICEWINE_WFO_WARIO) ||
+			lab126_board_is(BOARD_ID_ICEWINE_WARIO_512) ||
+			lab126_board_is(BOARD_ID_ICEWINE_WFO_WARIO_512))
 
 	{
 		gpio_request(MX6SL_ARM2_EPDC_SDDO_13, "fsr_spare");
@@ -170,7 +208,7 @@ void fsr_set_pin(int which, int enable)
 			gpio_set_value(MX6SL_PIN_KEY_COL1, enable);
 			break;
 		default:
-		break;
+			break;
 	}
 }
 EXPORT_SYMBOL(fsr_set_pin);
@@ -261,19 +299,25 @@ EXPORT_SYMBOL(gpio_fsr_bootloader_irq);
 
 int gpio_fsr_logging_irq(void)
 {
-        if(lab126_board_rev_greater_eq(BOARD_ID_WARIO_2)) //fsr spare is different on wario
-                return gpio_to_irq(MX6SL_PIN_KEY_COL1);
-        else
-                return gpio_to_irq(MX6SL_ARM2_EPDC_SDDO_13);
+	if(lab126_board_rev_greater_eq(BOARD_ID_WARIO_2)) //fsr spare is different on wario
+		return gpio_to_irq(MX6SL_PIN_KEY_COL1);
+	else
+		return gpio_to_irq(MX6SL_ARM2_EPDC_SDDO_13);
 }
 EXPORT_SYMBOL(gpio_fsr_logging_irq);
 
+#ifdef CONFIG_WARIO_HALL
 /*
  * hall sensor gpio value hi is not detected, lo is detected
  */
 int gpio_hallsensor_detect(void)
 {
-	return !gpio_get_value(MX6_WARIO_HALL_SNS);
+	if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+		lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+		return gpio_get_value(MX6_WARIO_HALL_SNS);
+	} else {
+		return !gpio_get_value(MX6_WARIO_HALL_SNS);
+	}
 }
 EXPORT_SYMBOL(gpio_hallsensor_detect);
 
@@ -286,14 +330,208 @@ void gpio_hallsensor_pullup(int enable)
 	}
 }
 EXPORT_SYMBOL(gpio_hallsensor_pullup);
+#endif
+
+#ifdef CONFIG_POWER_SODA
+/*
+ * soda external charger detect gpio (active low) HI:no external charger; LO: external charger connected
+ */
+int gpio_soda_ext_chg_detect(unsigned gpio)
+{
+	return !gpio_get_value(gpio);
+}
+EXPORT_SYMBOL(gpio_soda_ext_chg_detect);
+
+void gpio_soda_ctrl(unsigned gpio, int enable)
+{
+	if (enable > 0) {
+		gpio_direction_output(gpio, 1);
+	} else {
+		gpio_direction_input(gpio);
+	}
+}
+EXPORT_SYMBOL(gpio_soda_ctrl);
+
+/*
+ * soda dock detect gpio (active low) HI:soda disconnected; LO: soda connected
+ */
+int gpio_soda_dock_detect(unsigned gpio)
+{
+	return !gpio_get_value(gpio);
+}
+EXPORT_SYMBOL(gpio_soda_dock_detect);
+
+int (*sodadev_get_sda_state)(int sda_enable, sda_state_t* state) = 0;
+EXPORT_SYMBOL(sodadev_get_sda_state);
+
+void soda_config_sda_line(int i2c_sda_enable)
+{
+	if (!sodadev_get_sda_state)
+		return;
+
+	int ret;
+	sda_state_t state = {0};
+	while (ret=sodadev_get_sda_state(i2c_sda_enable, &state)) {
+		if (ret == 1) {
+			__raw_writel(state.sda_val, state.sda_item);
+		}
+		else if (ret == 2) {
+			gpio_direction_output(state.sda_item, 1);
+		}
+		else if (ret == 5) {
+			gpio_direction_input(state.sda_item);
+		}
+		else {
+			msleep(1);	
+		}
+	}
+}
+EXPORT_SYMBOL(soda_config_sda_line);
+
+bool soda_i2c_reset(void)
+{
+	int i;
+
+	gpio_direction_output(MX6_SODA_I2C_SCL, 1);
+	gpio_direction_output(MX6_SODA_I2C_SDA, 1);
+
+	udelay(I2C_BB_DELAY_US);
+
+	/* tri-state before reset */
+	gpio_direction_input(MX6_SODA_I2C_SCL);		
+	gpio_direction_input(MX6_SODA_I2C_SDA);	
+
+	if (!gpio_get_value(MX6_SODA_I2C_SCL)) {
+		printk(KERN_ERR "%s: failed - scl held low prior to reset\n",__func__);	
+		return false;	/* SCL held low; can't drive it */
+	}
+
+	for (i = 0; i < I2C_RESET_CLK_TOGGLE_NUM; i++) {
+		gpio_direction_output(MX6_SODA_I2C_SCL, 0);
+		udelay((I2C_BB_DELAY_US * 2));
+		gpio_direction_output(MX6_SODA_I2C_SCL, 1);
+		udelay((I2C_BB_DELAY_US * 2));
+	}
+
+	if (!gpio_get_value(MX6_SODA_I2C_SDA)) {
+		printk(KERN_ERR "%s: failed - sda stuck low after toggle\n",__func__);	
+		return false;	/* After SCL toggle still SDA stuck low */
+	}
+
+	/* send stop */
+	gpio_direction_output(MX6_SODA_I2C_SCL, 0);
+	udelay(I2C_BB_DELAY_US);
+	gpio_direction_output(MX6_SODA_I2C_SDA, 0);
+	udelay(I2C_BB_DELAY_US);
+	gpio_direction_output(MX6_SODA_I2C_SCL, 1);
+	udelay(I2C_BB_DELAY_US);
+	gpio_direction_output(MX6_SODA_I2C_SDA, 1);
+	udelay(I2C_BB_DELAY_US);
+
+	/* tri-state after reset */
+	gpio_direction_input(MX6_SODA_I2C_SCL);	
+	gpio_direction_input(MX6_SODA_I2C_SDA);
+
+	if (gpio_get_value(MX6_SODA_I2C_SCL) && gpio_get_value(MX6_SODA_I2C_SDA)) {
+		return true;
+	} else {
+		printk(KERN_ERR "%s: failed - scl/sda stuck low after reset\n",__func__);	
+		return false;	/* After SCL toggle still SDA stuck low */
+	}
+}
+EXPORT_SYMBOL(soda_i2c_reset);
+
+#endif
 
 /* WiFi Power Enable/Disable */
+#if defined(CONFIG_MX6SL_WARIO_BASE)
 void gpio_wifi_power_enable(int enable)
 {
 	gpio_direction_output(MX6_WARIO_WIFI_PWD, 0);
-        gpio_set_value(MX6_WARIO_WIFI_PWD, enable);
+	gpio_set_value(MX6_WARIO_WIFI_PWD, enable);
 }
 EXPORT_SYMBOL(gpio_wifi_power_enable);
+#endif
+
+void gpio_wifi_power_reset(void)
+{
+#if defined(CONFIG_MX6SL_WARIO_BASE)
+	gpio_wifi_power_enable(0);
+	/* 20ms  delay is provided by Qc */
+	mdelay(20);
+	gpio_wifi_power_enable(1);
+#elif defined(CONFIG_MX6SL_WARIO_WOODY)
+	gpio_set_value(MX6SL_WARIO_WL_REG_ON, 0);
+	mdelay(100);
+	gpio_set_value(MX6SL_WARIO_WL_REG_ON, 1);
+	/* BRCM data sheet "4343W-DS105-R" (1/12/2015)
+	 * Section 22: Power-up Sequence and Timing:
+	 * Wait at least 150 ms after VDDC and VDDIO are available
+	 * before initiating SDIO accesses.
+	 */
+	mdelay(150);
+#endif
+}
+
+/* Broadcom 4343W Wifi+BT GPIO functions */
+int brcm_gpio_wifi_bt_init(void)
+{
+	int ret = 0;
+
+	printk(KERN_ERR "\nRequest BRCM Wifi+BT GPIOs..\n");
+
+        ret = gpio_request(MX6SL_WARIO_WL_REG_ON, "WL_REG_ON");
+        if(unlikely(ret)) return ret;
+
+        ret = gpio_request(MX6SL_WARIO_BT_REG_ON, "BT_REG_ON");
+        if(unlikely(ret)) return ret;
+
+        ret = gpio_request(MX6SL_WARIO_BT_CLK_REQ, "wifi_set_normal_mode");
+        if(unlikely(ret)) return ret;
+        
+	ret = gpio_request(MX6SL_WARIO_BT_DEV_WAKE, "bt_dev_wake");
+        if(unlikely(ret)) return ret;
+
+        ret = gpio_request(MX6SL_WARIO_BT_HOST_WAKE, "bt_host_wake");
+        if(unlikely(ret)) return ret;
+
+	printk(KERN_ERR "\nBRCM Wifi+BT set directions..\n");
+
+	//Enable pins
+	gpio_direction_output(MX6SL_WARIO_WL_REG_ON, 0);
+	gpio_direction_output(MX6SL_WARIO_BT_REG_ON, 0);
+
+	//set host wake as input and dev wake as output
+	gpio_direction_input(MX6SL_WARIO_BT_HOST_WAKE);
+	gpio_direction_output(MX6SL_WARIO_BT_DEV_WAKE, 0);
+	
+	//clk request
+	gpio_direction_input(MX6SL_WARIO_BT_CLK_REQ);
+	
+	return ret;
+}
+EXPORT_SYMBOL(brcm_gpio_wifi_bt_init);
+
+void brcm_gpio_wifi_power_enable(int enable)
+{
+	gpio_set_value(MX6SL_WARIO_WL_REG_ON, enable);
+}
+EXPORT_SYMBOL(brcm_gpio_wifi_power_enable);
+
+void brcm_gpio_bt_power_enable(int enable)
+{
+	gpio_set_value(MX6SL_WARIO_BT_REG_ON, enable);
+}
+EXPORT_SYMBOL(brcm_gpio_bt_power_enable);
+
+void brcm_gpio_wifi_set_normal_mode(int enable)
+{ 
+/* this is input for BT but don't do it yet, there seems to be some issues
+ * still - TODO */
+/*	gpio_direction_output(MX6SL_WARIO_BT_CLK_REQ, 0);
+/	gpio_set_value(MX6SL_WARIO_BT_CLK_REQ, enable); */
+}
+EXPORT_SYMBOL(brcm_gpio_wifi_set_normal_mode);
 
 /**************touch**************************/
 int gpio_cyttsp_init_pins(void)
@@ -321,7 +559,7 @@ EXPORT_SYMBOL(gpio_cyttsp_init_pins);
 int gpio_zforce_init_pins(void)
 {
 	int ret = 0;
-	
+
 	ret = gpio_request(MX6SL_PIN_TOUCH_INTB, "touch_intb");
 	if(unlikely(ret)) return ret;
 
@@ -331,16 +569,16 @@ int gpio_zforce_init_pins(void)
 	/* touch BSL programming pins */
 	ret = gpio_request(MX6SL_PIN_TOUCH_SWDL, "touch_swdl");
 	if(unlikely(ret)) goto free_rst;
-	
+
 	ret = gpio_request(MX6SL_PIN_TOUCH_UART_TX, "touch_uarttx");
 	if(unlikely(ret)) goto free_swdl;
-	
+
 	ret = gpio_request(MX6SL_PIN_TOUCH_UART_RX, "touch_uartrx");
 	if(unlikely(ret)) goto free_uarttx;
 
 	/* GPIO Interrupt - is set as input once and for all */
 	gpio_direction_input(MX6SL_PIN_TOUCH_INTB);
-	
+
 	/* trigger reset - active low */
 	gpio_direction_output(MX6SL_PIN_TOUCH_RST, 0);
 
@@ -376,7 +614,7 @@ EXPORT_SYMBOL(gpio_zforce_set_reset);
 
 void gpio_zforce_set_bsl_test(int val)
 {
-        gpio_set_value(MX6SL_PIN_TOUCH_SWDL, val);
+	gpio_set_value(MX6SL_PIN_TOUCH_SWDL, val);
 }
 EXPORT_SYMBOL(gpio_zforce_set_bsl_test);
 
@@ -465,8 +703,8 @@ EXPORT_SYMBOL(gpio_cyttsp_hw_reset);
 int gpio_setup_wdog(void)
 {
 	int ret;
-        ret = gpio_request(MX6_WARIO_WDOG_B, "wario_wdog");
-        if(unlikely(ret)) return ret;
+	ret = gpio_request(MX6_WARIO_WDOG_B, "wario_wdog");
+	if(unlikely(ret)) return ret;
 
 	gpio_set_value(MX6_WARIO_WDOG_B, 1);
 	gpio_direction_output(MX6_WARIO_WDOG_B, 1);
@@ -478,178 +716,274 @@ EXPORT_SYMBOL(gpio_setup_wdog);
 // Function to config iomux for instance epdc.
 void epdc_iomux_config_lve(void)
 {
-    // Config epdc.GDCLK to pad EPDC_GDCLK(A12)
-    // Mux Register:
-    // IOMUXC_SW_MUX_CTL_PAD_EPDC_GDCLK(0x020E00D0)
-    __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_GDCLK));
-    // Pad Control Register:
-    // IOMUXC_SW_PAD_CTL_PAD_EPDC_GDCLK(0x020E03C0)
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
-           (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
-           (SPD_100MHZ & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_SLOW & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_GDCLK));
+	// Config epdc.GDCLK to pad EPDC_GDCLK(A12)
+	// Mux Register:
+	// IOMUXC_SW_MUX_CTL_PAD_EPDC_GDCLK(0x020E00D0)
+	__raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_GDCLK));
+	// Pad Control Register:
+	// IOMUXC_SW_PAD_CTL_PAD_EPDC_GDCLK(0x020E03C0)
+	__raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+			(PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+			(SPD_100MHZ & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_SLOW & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_GDCLK));
 
-    // Config epdc.GDOE to pad EPDC_GDOE(B13)
-    // Mux Register:
-    // IOMUXC_SW_MUX_CTL_PAD_EPDC_GDOE(0x020E00D4)
-    __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_GDOE));
-    // Pad Control Register:
-    // IOMUXC_SW_PAD_CTL_PAD_EPDC_GDOE(0x020E03C4)
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
-           (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
-           (SPD_100MHZ & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_SLOW & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_GDOE));
+	// Config epdc.GDOE to pad EPDC_GDOE(B13)
+	// Mux Register:
+	// IOMUXC_SW_MUX_CTL_PAD_EPDC_GDOE(0x020E00D4)
+	__raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_GDOE));
+	// Pad Control Register:
+	// IOMUXC_SW_PAD_CTL_PAD_EPDC_GDOE(0x020E03C4)
+	__raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+			(PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+			(SPD_100MHZ & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_SLOW & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_GDOE));
 
-    // Config epdc.GDSP to pad EPDC_GDSP(A11)
-    // Mux Register:
-    // IOMUXC_SW_MUX_CTL_PAD_EPDC_GDSP(0x020E00DC)
-    __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_GDSP));
-    // Pad Control Register:
-    // IOMUXC_SW_PAD_CTL_PAD_EPDC_GDSP(0x020E03CC)
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
-           (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
-           (SPD_100MHZ & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_SLOW & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_GDSP));
+	// Config epdc.GDSP to pad EPDC_GDSP(A11)
+	// Mux Register:
+	// IOMUXC_SW_MUX_CTL_PAD_EPDC_GDSP(0x020E00DC)
+	__raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_GDSP));
+	// Pad Control Register:
+	// IOMUXC_SW_PAD_CTL_PAD_EPDC_GDSP(0x020E03CC)
+	__raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+			(PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+			(SPD_100MHZ & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_SLOW & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_GDSP));
 
-    // Config epdc.PWRCOM to pad EPDC_PWRCOM(B11)
-    // Mux Register:
-    // IOMUXC_SW_MUX_CTL_PAD_EPDC_PWRCOM(0x020E00E0)
-    __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_PWRCOM));
-    // Pad Control Register:
-    // IOMUXC_SW_PAD_CTL_PAD_EPDC_PWRCOM(0x020E03D0)
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
-           (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
-           (SPD_100MHZ & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_SLOW & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_PWRCOM));
+	// Config epdc.PWRCOM to pad EPDC_PWRCOM(B11)
+	// Mux Register:
+	// IOMUXC_SW_MUX_CTL_PAD_EPDC_PWRCOM(0x020E00E0)
+	__raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_PWRCOM));
+	// Pad Control Register:
+	// IOMUXC_SW_PAD_CTL_PAD_EPDC_PWRCOM(0x020E03D0)
+	__raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+			(PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+			(SPD_100MHZ & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_SLOW & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_PWRCOM));
 
-    // Config epdc.PWRSTAT to pad EPDC_PWRSTAT(E10)
-    // Mux Register:
-    // IOMUXC_SW_MUX_CTL_PAD_EPDC_PWRSTAT(0x020E00F8)
-    __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT5 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_PWRSTAT));
-    // Pad Control Register:
-    // IOMUXC_SW_PAD_CTL_PAD_EPDC_PWRSTAT(0x020E03E8)
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PU & 0x3) << 14 |
-           (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_ENABLED & 0x1) << 11 |
-           (SPD_100MHZ & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_SLOW & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_PWRSTAT));
+	// Config epdc.PWRSTAT to pad EPDC_PWRSTAT(E10)
+	// Mux Register:
+	// IOMUXC_SW_MUX_CTL_PAD_EPDC_PWRSTAT(0x020E00F8)
+	__raw_writel((SION_DISABLED & 0x1) << 4 | (ALT5 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_PWRSTAT));
+	// Pad Control Register:
+	// IOMUXC_SW_PAD_CTL_PAD_EPDC_PWRSTAT(0x020E03E8)
+	__raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PU & 0x3) << 14 |
+			(PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_ENABLED & 0x1) << 11 |
+			(SPD_100MHZ & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_SLOW & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_PWRSTAT));
 
-    // Config epdc.SDCE[0] to pad EPDC_SDCE0(C11)
-    // Mux Register:
-    // IOMUXC_SW_MUX_CTL_PAD_EPDC_SDCE0(0x020E0100)
-    __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_SDCE0));
-    // Pad Control Register:
-    // IOMUXC_SW_PAD_CTL_PAD_EPDC_SDCE0(0x020E03F0)
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
-           (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
-           (SPD_100MHZ & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_SLOW & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_SDCE0));
+	// Config epdc.SDCE[0] to pad EPDC_SDCE0(C11)
+	// Mux Register:
+	// IOMUXC_SW_MUX_CTL_PAD_EPDC_SDCE0(0x020E0100)
+	__raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_SDCE0));
+	// Pad Control Register:
+	// IOMUXC_SW_PAD_CTL_PAD_EPDC_SDCE0(0x020E03F0)
+	if (lab126_board_is(BOARD_ID_WHISKY_WFO) ||
+		lab126_board_is(BOARD_ID_WHISKY_WAN) ||
+		lab126_board_is(BOARD_ID_WOODY)) {
+		__raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+			(PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+			(SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_FAST & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_SDCE0));
+	} else {
+		__raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+			(PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+			(SPD_100MHZ & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_SLOW & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_SDCE0));
+	}
 
-    // Config epdc.SDCLK to pad EPDC_SDCLK(B10)
-    // Mux Register:
-    // IOMUXC_SW_MUX_CTL_PAD_EPDC_SDCLK(0x020E0110)
-    __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_SDCLK));
-    // Pad Control Register:
-    // IOMUXC_SW_PAD_CTL_PAD_EPDC_SDCLK(0x020E0400)
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
-           (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
-           (SPD_100MHZ & 0x3) << 6 | (DSE_48OHM & 0x7) << 3 | (SRE_FAST & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_SDCLK));
+	// Config epdc.SDCLK to pad EPDC_SDCLK(B10)
+	// Mux Register:
+	// IOMUXC_SW_MUX_CTL_PAD_EPDC_SDCLK(0x020E0110)
+	__raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_SDCLK));
+	// Pad Control Register:
+	// IOMUXC_SW_PAD_CTL_PAD_EPDC_SDCLK(0x020E0400)
+	__raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+			(PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+			(SPD_100MHZ & 0x3) << 6 | (DSE_48OHM & 0x7) << 3 | (SRE_FAST & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_SDCLK));
 
-    // Config epdc.SDDO[0] to pad EPDC_D0(A18)
-    // Mux Register:
-    // IOMUXC_SW_MUX_CTL_PAD_EPDC_D0(0x020E0090)
-    __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_D0));
-    // Pad Control Register:
-    // IOMUXC_SW_PAD_CTL_PAD_EPDC_D0(0x020E0380)
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
-           (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
-           (SPD_100MHZ & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_FAST & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_D0));
+	// Config epdc.SDDO[0] to pad EPDC_D0(A18)
+	// Mux Register:
+	// IOMUXC_SW_MUX_CTL_PAD_EPDC_D0(0x020E0090)
+	__raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_D0));
+	// Pad Control Register:
+	// IOMUXC_SW_PAD_CTL_PAD_EPDC_D0(0x020E0380)
+	__raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+			(PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+			(SPD_100MHZ & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_FAST & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_D0));
 
-    // Config epdc.SDDO[1] to pad EPDC_D1(A17)
-    // Mux Register:
-    // IOMUXC_SW_MUX_CTL_PAD_EPDC_D1(0x020E0094)
-    __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_D1));
-    // Pad Control Register:
-    // IOMUXC_SW_PAD_CTL_PAD_EPDC_D1(0x020E0384)
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
-           (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
-           (SPD_100MHZ & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_FAST & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_D1));
+	// Config epdc.SDDO[1] to pad EPDC_D1(A17)
+	// Mux Register:
+	// IOMUXC_SW_MUX_CTL_PAD_EPDC_D1(0x020E0094)
+	__raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_D1));
+	// Pad Control Register:
+	// IOMUXC_SW_PAD_CTL_PAD_EPDC_D1(0x020E0384)
+	__raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+			(PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+			(SPD_100MHZ & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_FAST & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_D1));
 
-    // Config epdc.SDDO[2] to pad EPDC_D2(B17)
-    // Mux Register:
-    // IOMUXC_SW_MUX_CTL_PAD_EPDC_D2(0x020E00B0)
-    __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_D2));
-    // Pad Control Register:
-    // IOMUXC_SW_PAD_CTL_PAD_EPDC_D2(0x020E03A0)
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
-           (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
-           (SPD_100MHZ & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_FAST & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_D2));
+	// Config epdc.SDDO[2] to pad EPDC_D2(B17)
+	// Mux Register:
+	// IOMUXC_SW_MUX_CTL_PAD_EPDC_D2(0x020E00B0)
+	__raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_D2));
+	// Pad Control Register:
+	// IOMUXC_SW_PAD_CTL_PAD_EPDC_D2(0x020E03A0)
+	__raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+			(PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+			(SPD_100MHZ & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_FAST & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_D2));
 
-    // Config epdc.SDDO[3] to pad EPDC_D3(A16)
-    // Mux Register:
-    // IOMUXC_SW_MUX_CTL_PAD_EPDC_D3(0x020E00B4)
-    __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_D3));
-    // Pad Control Register:
-    // IOMUXC_SW_PAD_CTL_PAD_EPDC_D3(0x020E03A4)
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
-           (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
-           (SPD_100MHZ & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_FAST & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_D3));
+	// Config epdc.SDDO[3] to pad EPDC_D3(A16)
+	// Mux Register:
+	// IOMUXC_SW_MUX_CTL_PAD_EPDC_D3(0x020E00B4)
+	__raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_D3));
+	// Pad Control Register:
+	// IOMUXC_SW_PAD_CTL_PAD_EPDC_D3(0x020E03A4)
+	__raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+			(PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+			(SPD_100MHZ & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_FAST & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_D3));
 
-    // Config epdc.SDDO[4] to pad EPDC_D4(B16)
-    // Mux Register:
-    // IOMUXC_SW_MUX_CTL_PAD_EPDC_D4(0x020E00B8)
-    __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_D4));
-    // Pad Control Register:
-    // IOMUXC_SW_PAD_CTL_PAD_EPDC_D4(0x020E03A8)
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
-           (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
-           (SPD_100MHZ & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_FAST & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_D4));
+	// Config epdc.SDDO[4] to pad EPDC_D4(B16)
+	// Mux Register:
+	// IOMUXC_SW_MUX_CTL_PAD_EPDC_D4(0x020E00B8)
+	__raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_D4));
+	// Pad Control Register:
+	// IOMUXC_SW_PAD_CTL_PAD_EPDC_D4(0x020E03A8)
+	__raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+			(PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+			(SPD_100MHZ & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_FAST & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_D4));
 
-    // Config epdc.SDDO[5] to pad EPDC_D5(A15)
-    // Mux Register:
-    // IOMUXC_SW_MUX_CTL_PAD_EPDC_D5(0x020E00BC)
-    __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_D5));
-    // Pad Control Register:
-    // IOMUXC_SW_PAD_CTL_PAD_EPDC_D5(0x020E03AC)
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
-           (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
-           (SPD_100MHZ & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_FAST & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_D5));
+	// Config epdc.SDDO[5] to pad EPDC_D5(A15)
+	// Mux Register:
+	// IOMUXC_SW_MUX_CTL_PAD_EPDC_D5(0x020E00BC)
+	__raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_D5));
+	// Pad Control Register:
+	// IOMUXC_SW_PAD_CTL_PAD_EPDC_D5(0x020E03AC)
+	__raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+			(PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+			(SPD_100MHZ & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_FAST & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_D5));
 
-    // Config epdc.SDDO[6] to pad EPDC_D6(B15)
-    // Mux Register:
-    // IOMUXC_SW_MUX_CTL_PAD_EPDC_D6(0x020E00C0)
-    __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_D6));
-    // Pad Control Register:
-    // IOMUXC_SW_PAD_CTL_PAD_EPDC_D6(0x020E03B0)
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
-           (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
-           (SPD_100MHZ & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_FAST & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_D6));
+	// Config epdc.SDDO[6] to pad EPDC_D6(B15)
+	// Mux Register:
+	// IOMUXC_SW_MUX_CTL_PAD_EPDC_D6(0x020E00C0)
+	__raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_D6));
+	// Pad Control Register:
+	// IOMUXC_SW_PAD_CTL_PAD_EPDC_D6(0x020E03B0)
+	__raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+			(PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+			(SPD_100MHZ & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_FAST & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_D6));
 
-    // Config epdc.SDDO[7] to pad EPDC_D7(C15)
-    // Mux Register:
-    // IOMUXC_SW_MUX_CTL_PAD_EPDC_D7(0x020E00C4)
-    __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_D7));
-    // Pad Control Register:
-    // IOMUXC_SW_PAD_CTL_PAD_EPDC_D7(0x020E03B4)
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
-           (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
-           (SPD_100MHZ & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_FAST & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_D7));
+	// Config epdc.SDDO[7] to pad EPDC_D7(C15)
+	// Mux Register:
+	// IOMUXC_SW_MUX_CTL_PAD_EPDC_D7(0x020E00C4)
+	__raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_D7));
+	// Pad Control Register:
+	// IOMUXC_SW_PAD_CTL_PAD_EPDC_D7(0x020E03B4)
+	__raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+			(PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+			(SPD_100MHZ & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_FAST & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_D7));
 
-    // Config epdc.SDLE to pad EPDC_SDLE(B8)
-    // Mux Register:
-    // IOMUXC_SW_MUX_CTL_PAD_EPDC_SDLE(0x020E0114)
-    __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_SDLE));
-    // Pad Control Register:
-    // IOMUXC_SW_PAD_CTL_PAD_EPDC_SDLE(0x020E0404)
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
-           (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
-           (SPD_100MHZ & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_FAST & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_SDLE));
+	// Config epdc.SDLE to pad EPDC_SDLE(B8)
+	// Mux Register:
+	// IOMUXC_SW_MUX_CTL_PAD_EPDC_SDLE(0x020E0114)
+	__raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_SDLE));
+	// Pad Control Register:
+	// IOMUXC_SW_PAD_CTL_PAD_EPDC_SDLE(0x020E0404)
+	__raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+			(PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+			(SPD_100MHZ & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_FAST & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_SDLE));
 
-    // Config epdc.SDOE to pad EPDC_SDOE(E7)
-    // Mux Register:
-    // IOMUXC_SW_MUX_CTL_PAD_EPDC_SDOE(0x020E0118)
-    __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_SDOE));
-    // Pad Control Register:
-    // IOMUXC_SW_PAD_CTL_PAD_EPDC_SDOE(0x020E0408)
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
-           (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
-           (SPD_100MHZ & 0x3) << 6 | (DSE_48OHM & 0x7) << 3 | (SRE_FAST & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_SDOE));
+	// Config epdc.SDOE to pad EPDC_SDOE(E7)
+	// Mux Register:
+	// IOMUXC_SW_MUX_CTL_PAD_EPDC_SDOE(0x020E0118)
+	__raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), (IOMUXC_SW_MUX_CTL_PAD_EPDC_SDOE));
+	// Pad Control Register:
+	// IOMUXC_SW_PAD_CTL_PAD_EPDC_SDOE(0x020E0408)
+	__raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+			(PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+			(SPD_100MHZ & 0x3) << 6 | (DSE_48OHM & 0x7) << 3 | (SRE_FAST & 0x1), (IOMUXC_SW_PAD_CTL_PAD_EPDC_SDOE));
 }
 EXPORT_SYMBOL(epdc_iomux_config_lve);
 /********************WAN GPIOs ********************/
+
+#if defined(CONFIG_MX6SL_WARIO_WOODY)
+int gpio_wan_mhi_irq(void)
+{
+	return gpio_to_irq(MX6SL_WARIO_3GM_WAKEUP_MDM);
+}
+EXPORT_SYMBOL(gpio_wan_mhi_irq);
+
+int gpio_wan_usb_wake(void)
+{
+	return gpio_get_value(MX6SL_WARIO_3GM_WAKEUP_MDM);
+}
+EXPORT_SYMBOL(gpio_wan_usb_wake);
+
+void gpio_wan_dl_enable(int enable)
+{
+        gpio_direction_output(MX6SL_WARIO_3GM_DL_KEY, 0);
+        gpio_set_value(MX6SL_WARIO_3GM_DL_KEY, enable);
+}
+EXPORT_SYMBOL(gpio_wan_dl_enable);
+
+void gpio_wan_sar_detect(int detect)
+{
+        gpio_direction_output(MX6SL_WARIO_3GM_SAR_DET, 0);
+        gpio_set_value(MX6SL_WARIO_3GM_SAR_DET, detect);
+}
+EXPORT_SYMBOL(gpio_wan_sar_detect);
+
+int whistler_wan_request_gpio(void)
+{
+	int ret = 0;
+
+	ret = gpio_request(MX6SL_WARIO_3GM_FW_READY, "FW_Ready");
+	if (ret) return ret;
+	ret = gpio_request(MX6SL_WARIO_3GM_POWER_ON, "Power");
+	if (ret) {
+		gpio_free(MX6SL_WARIO_3GM_FW_READY);
+		return ret;
+	}
+	gpio_direction_output(MX6SL_WARIO_3GM_POWER_ON, 0);
+	ret = gpio_request(MX6SL_WARIO_3GM_DL_KEY, "DLen");
+	if (ret) {
+		gpio_free(MX6SL_WARIO_3GM_POWER_ON);
+		gpio_free(MX6SL_WARIO_3GM_FW_READY);
+		return ret;
+	}
+	ret = gpio_request(MX6SL_WARIO_3GM_SAR_DET, "Sar");
+	if (ret) {
+		gpio_free(MX6SL_WARIO_3GM_DL_KEY);
+		gpio_free(MX6SL_WARIO_3GM_POWER_ON);
+		gpio_free(MX6SL_WARIO_3GM_FW_READY);
+		return ret;
+	}
+	ret = gpio_request(MX6SL_WARIO_3GM_WAKEUP_MDM, "USB_Wake");
+	if (ret) {
+		printk("Failed to request GPIO(4, 26)! error: %d. Ignore!\n", ret);
+		ret = 0;
+	}
+	gpio_direction_input(MX6SL_WARIO_3GM_WAKEUP_MDM);
+
+	return ret;
+}
+EXPORT_SYMBOL(whistler_wan_request_gpio);
+
+/* Init hall oneshot circuit: 
+ * Disable oneshot during boot & normal operation (drive HI) 
+ */
+void gpio_hall_oneshot_init(void)
+{
+	if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+		lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+		gpio_request(MX6SL_ARM2_EPDC_SDCE1, "hall_qboot_enable");
+		gpio_direction_output(MX6SL_ARM2_EPDC_SDCE1, 1);
+	}
+}
+EXPORT_SYMBOL(gpio_hall_oneshot_init);
+
+void gpio_hall_oneshot_ctrl(int enable) 
+{
+	if (enable > 0) {
+		gpio_direction_output(MX6SL_ARM2_EPDC_SDCE1, 0);
+	} else {
+		gpio_direction_output(MX6SL_ARM2_EPDC_SDCE1, 1);	/* default init state during boot */
+	}
+}
+EXPORT_SYMBOL(gpio_hall_oneshot_ctrl);
+
+#elif defined(CONFIG_MX6SL_WARIO_BASE)
 void gpio_wan_ldo_fet_init(void)
 {
 	/* Note: gpio wan ldo/fet ctrl only needed for IW(WAN)EVT1.2 */
@@ -681,6 +1015,32 @@ void gpio_wan_ldo_fet_ctrl(int enable)
 }
 EXPORT_SYMBOL(gpio_wan_ldo_fet_ctrl);
 
+void gpio_wan_rf_enable(int enable)
+{
+        gpio_direction_output(MX6_WAN_ON_OFF, 0);
+        gpio_set_value(MX6_WAN_ON_OFF, enable);
+}
+EXPORT_SYMBOL(gpio_wan_rf_enable);
+
+void gpio_wan_usb_enable(int enable)
+{
+	gpio_direction_output(MX6_WAN_USB_EN, 0);
+	gpio_set_value(MX6_WAN_USB_EN, enable);
+}
+EXPORT_SYMBOL(gpio_wan_usb_enable);
+
+int gpio_wan_mhi_irq(void)
+{
+	return gpio_to_irq(MX6_WAN_MHI);
+}
+EXPORT_SYMBOL(gpio_wan_mhi_irq);
+
+int gpio_wan_usb_wake(void)
+{
+	return gpio_get_value(MX6_WAN_MHI);
+}
+EXPORT_SYMBOL(gpio_wan_usb_wake);
+
 void wan_request_gpio(void)
 {
 	gpio_request(MX6_WAN_FW_READY, "FW_Ready");
@@ -691,99 +1051,72 @@ void wan_request_gpio(void)
 }
 EXPORT_SYMBOL(wan_request_gpio);
 
+#endif
+
 void wan_free_gpio(void)
 {
-	gpio_free(MX6_WAN_SHUTDOWN);
-	gpio_free(MX6_WAN_ON_OFF);
+#if defined(CONFIG_MX6SL_WARIO_WOODY)
+	gpio_free(MX6SL_WARIO_3GM_SAR_DET);
+	gpio_free(MX6SL_WARIO_3GM_DL_KEY);
+	gpio_free(MX6SL_WARIO_3GM_POWER_ON);
+	gpio_free(MX6SL_WARIO_3GM_FW_READY);
+#elif defined(CONFIG_MX6SL_WARIO_BASE)
 	gpio_free(MX6_WAN_USB_EN);
+	gpio_free(MX6_WAN_ON_OFF);
+	gpio_free(MX6_WAN_SHUTDOWN);
 	gpio_free(MX6_WAN_FW_READY);
-	return;
+#endif
 }
 EXPORT_SYMBOL(wan_free_gpio);
 
 void gpio_wan_power(int enable)
 {
-	/* Set the direction to output */
+#if defined(CONFIG_MX6SL_WARIO_WOODY)
+	gpio_set_value(MX6SL_WARIO_3GM_POWER_ON, enable);
+#elif defined(CONFIG_MX6SL_WARIO_BASE)
 	gpio_direction_output(MX6_WAN_SHUTDOWN, 0);
-
-	/* Enable/disable power */
 	gpio_set_value(MX6_WAN_SHUTDOWN, enable);
+#endif
 }
 EXPORT_SYMBOL(gpio_wan_power);
 
-void gpio_wan_rf_enable(int enable)
-{
-        gpio_direction_output(MX6_WAN_ON_OFF, 0);
-        gpio_set_value(MX6_WAN_ON_OFF, enable);
-}
-EXPORT_SYMBOL(gpio_wan_rf_enable);
-
-void gpio_wan_usb_enable(int enable)
-{
-        gpio_direction_output(MX6_WAN_USB_EN, 0);
-        gpio_set_value(MX6_WAN_USB_EN, enable);
-}
-EXPORT_SYMBOL(gpio_wan_usb_enable);
-
-int gpio_wan_mhi_irq(void)
-{
-        return gpio_to_irq(MX6_WAN_MHI);
-}
-EXPORT_SYMBOL(gpio_wan_mhi_irq);
-
-#if 0
-static void gpio_wan_hmi_irq(int enable)
-{
-        gpio_direction_output(MX6_WAN_HMI, 0);
-        gpio_set_value(MX6_WAN_HMI, enable);
-}
-#endif
-
 int gpio_wan_fw_ready_irq(void)
 {
-        return gpio_to_irq(MX6_WAN_FW_READY);
+#if defined(CONFIG_MX6SL_WARIO_WOODY)
+        return gpio_to_irq(MX6SL_WARIO_3GM_FW_READY);
+#elif defined(CONFIG_MX6SL_WARIO_BASE)
+	return gpio_to_irq(MX6_WAN_FW_READY);
+#endif
 }
 EXPORT_SYMBOL(gpio_wan_fw_ready_irq);
 
 int gpio_wan_fw_ready(void)
 {
-        return gpio_get_value(MX6_WAN_FW_READY);
+#if defined(CONFIG_MX6SL_WARIO_WOODY)
+        return gpio_get_value(MX6SL_WARIO_3GM_FW_READY);
+#elif defined(CONFIG_MX6SL_WARIO_BASE)
+	return gpio_get_value(MX6_WAN_FW_READY);
+#endif
 }
 EXPORT_SYMBOL(gpio_wan_fw_ready);
 
-# if 0 //PB: TODO
-static void set_fw_ready_gpio_state(int enable)
-{
-        if( enable) {
-                mxc_iomux_set_pad(MX50_PIN_EIM_DA6,
-                        PAD_CTL_PKE_ENABLE | PAD_CTL_PUE_PULL |
-                        PAD_CTL_ODE_OPENDRAIN_NONE |
-                        PAD_CTL_100K_PU
-                );
-        } else {
-                mxc_iomux_set_pad(MX50_PIN_EIM_DA6,
-                        PAD_CTL_PKE_ENABLE | PAD_CTL_PUE_PULL |
-                        PAD_CTL_ODE_OPENDRAIN_NONE |
-                        PAD_CTL_100K_PD
-                );
-        }
-}
-#endif
-int gpio_wan_usb_wake(void)
-{
-        return gpio_get_value(MX6_WAN_MHI);
-}
-EXPORT_SYMBOL(gpio_wan_usb_wake);
-
 int gpio_wan_host_wake_irq(void)
 {
-	return gpio_to_irq(MX6_WAN_HOST_WAKE);
+#if defined(CONFIG_MX6SL_WARIO_WOODY)
+	return gpio_to_irq(MX6SL_WARIO_3GM_WAKEUP_AP);
+#elif defined(CONFIG_MX6SL_WARIO_BASE)
+        return gpio_to_irq(MX6_WAN_HOST_WAKE);
+#endif
 }
 EXPORT_SYMBOL(gpio_wan_host_wake_irq);
 
 int gpio_wan_host_wake(void)
 {
-	return gpio_get_value(MX6_WAN_HOST_WAKE);
+#if defined(CONFIG_MX6SL_WARIO_WOODY)
+	return gpio_get_value(MX6SL_WARIO_3GM_WAKEUP_AP);
+#elif defined(CONFIG_MX6SL_WARIO_BASE)
+        return gpio_get_value(MX6_WAN_HOST_WAKE);
+#endif
 }
 EXPORT_SYMBOL(gpio_wan_host_wake);
 
@@ -794,7 +1127,7 @@ MX6SL_PAD_EPDC_SDCE2__GPIO_1_29
 MX6SL_PAD_EPDC_SDCE3__GPIO_1_30
 #define MX6SL_ARM2_EPDC_SDCE2           IMX_GPIO_NR(1, 29)
 #define MX6SL_ARM2_EPDC_SDCE3           IMX_GPIO_NR(1, 30)
-*/
+ */
 /* gpio_i2c3_scl_toggle:
  *
  */
@@ -804,7 +1137,7 @@ void gpio_i2c3_scl_toggle(void)
 	int i = 0;
 	gpio_direction_output(MX6SL_ARM2_EPDC_SDCE2, 1);
 	gpio_set_value(MX6SL_ARM2_EPDC_SDCE2, 1);
-	
+
 	for (i = 0; i < I2C_RESET_CLK_CNT; i++) {
 		gpio_set_value(MX6SL_ARM2_EPDC_SDCE2, 0);
 		udelay(20);

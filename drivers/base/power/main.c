@@ -46,6 +46,51 @@ LIST_HEAD(dpm_prepared_list);
 LIST_HEAD(dpm_suspended_list);
 LIST_HEAD(dpm_noirq_list);
 
+#ifdef CONFIG_POWER_SODA
+
+#include <linux/device.h>
+#include <linux/platform_device.h>
+
+#define to_platform_driver(drv) (container_of((drv), struct platform_driver, \
+                                 driver))
+
+#define TRACE_STOP_NAME "mwan"
+#define TRACE_DEV(dev, trace)							\
+	if(trace){ \
+			trace_dev(__FUNCTION__,__LINE__, dev); \
+			if(!strncmp(dev_name(dev), TRACE_STOP_NAME, strlen(TRACE_STOP_NAME)) || \
+		   (dev->bus && !strncmp(dev->bus->name, TRACE_STOP_NAME, strlen(TRACE_STOP_NAME))) \
+			) \
+				trace = 0; \
+		} \
+
+static void trace_dev(char* fn, int line, struct device *dev){
+	struct device_driver *drv = dev->driver;
+	struct platform_driver *pdrv = to_platform_driver(dev->driver);
+	struct platform_device *pdev = to_platform_device(dev);
+
+	printk(KERN_ERR"%s dev:0x%x bus:%s dev->power.async_suspend:%d %s:%d\n", dev_name(dev), dev, 
+		   dev->bus?dev->bus->name:"no bus ", dev->power.async_suspend, fn,line);
+	return; //for now limit amount of prints
+
+	if(drv && drv->pm){
+		printk(KERN_ERR"    drv->pm->resume 0x%x ,  drv->pm->suspend 0x%x\n", drv->pm->resume, drv->pm->suspend);
+		printk(KERN_ERR"    drv->pm->resume_noirq 0x%x rv->pm->suspend_noirq 0x%x\n", drv->pm->resume_noirq, drv->pm->suspend_noirq);
+	}
+	
+	if (pdrv && dev->driver && pdrv->resume)
+		printk(KERN_ERR"    pdrv->resume 0x%x pdrv->suspend 0x%x\n", pdrv->resume, pdrv->suspend);
+
+	if(dev->bus && dev->bus->pm)
+			printk(KERN_ERR"    dev->bus->pm->resume 0x%x  dev->pm->suspend 0x%x\n", dev->bus->pm->resume, dev->bus->pm->suspend);			
+}
+
+#else //CONFIG_POWER_SODA
+
+ #define TRACE_DEV(dev, trace)
+
+#endif
+
 static DEFINE_MUTEX(dpm_list_mtx);
 static pm_message_t pm_transition;
 
@@ -620,6 +665,10 @@ static bool is_async(struct device *dev)
 		&& !pm_trace_is_enabled();
 }
 
+#ifdef CONFIG_LAB126
+extern  void imx2_wdt_reinit(void);
+#endif
+
 /**
  * dpm_resume - Execute "resume" callbacks for non-sysdev devices.
  * @state: PM transition of the system being carried out.
@@ -631,6 +680,10 @@ void dpm_resume(pm_message_t state)
 {
 	struct device *dev;
 	ktime_t starttime = ktime_get();
+	
+#ifdef CONFIG_LAB126
+	imx2_wdt_reinit();
+#endif
 
 	might_sleep();
 
@@ -816,7 +869,7 @@ static int device_suspend_noirq(struct device *dev, pm_message_t state)
 int dpm_suspend_noirq(pm_message_t state)
 {
 	ktime_t starttime = ktime_get();
-	int error = 0;
+	int error = 0, trace = 0;
 
 	suspend_device_irqs();
 	mutex_lock(&dpm_list_mtx);
@@ -824,6 +877,9 @@ int dpm_suspend_noirq(pm_message_t state)
 		struct device *dev = to_device(dpm_suspended_list.prev);
 
 		get_device(dev);
+
+		TRACE_DEV(dev, trace)
+
 		mutex_unlock(&dpm_list_mtx);
 
 		error = device_suspend_noirq(dev, state);
@@ -969,7 +1025,7 @@ static int device_suspend(struct device *dev)
 int dpm_suspend(pm_message_t state)
 {
 	ktime_t starttime = ktime_get();
-	int error = 0;
+	int error = 0, trace = 0;
 
 	might_sleep();
 
@@ -980,6 +1036,7 @@ int dpm_suspend(pm_message_t state)
 		struct device *dev = to_device(dpm_prepared_list.prev);
 
 		get_device(dev);
+		TRACE_DEV(dev, trace);
 		mutex_unlock(&dpm_list_mtx);
 
 		error = device_suspend(dev);

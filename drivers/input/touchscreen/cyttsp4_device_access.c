@@ -56,8 +56,20 @@
 #define CY_NULL_CMD_SIZEL_INDEX  2
 #define CY_NULL_CMD_SIZEH_INDEX  3
 
+
+#define DEVICE_TYPE_TMA4xx      0
+#define DEVICE_TYPE_TMA445      1
+
+#define OPENS_TMA4xx_TEST_TYPE_MUTUAL   0
+#define OPENS_TMA4xx_TEST_TYPE_BUTTON   1
+
 #define HI_BYTE(x)  (u8)(((x) >> 8) & 0xFF)
 #define LOW_BYTE(x) (u8)((x) & 0xFF)
+
+#define STATUS_SUCCESS  0
+#define STATUS_FAIL     -1
+
+#define READ_LENGTH_MAX 65535
 
 struct heatmap_param {
 	bool scan_start;
@@ -83,12 +95,16 @@ struct cyttsp4_device_access_data {
 	u8 ic_buf[CY_MAX_PRBUF_SIZE];
 	u8 return_buf[CY_MAX_PRBUF_SIZE];
 	struct heatmap_param heatmap;
+	u8 get_idac_data_id;
+	u8 opens_device_type;
+        u8 opens_test_type;
 };
 
 struct cyttsp4_device_access_data *g_da_data;
 extern int (*cyttsp4_easy_calibrate)(int);
 
 /*
+
  * cyttsp4_is_awakening_grpnum
  * Returns true if a grpnum requires being awake
  */
@@ -1949,6 +1965,9 @@ static ssize_t cyttsp4_get_panel_data_show(struct device *dev,
 		
 	if(lab126_board_is(BOARD_ID_MUSCAT_WAN) || lab126_board_is(BOARD_ID_MUSCAT_WFO))
 		newline = 40;
+	
+	if(lab126_board_is(BOARD_ID_WHISKY_WFO) || lab126_board_is(BOARD_ID_WHISKY_WAN))
+		newline = 42;
 
 	rc = cyttsp4_request_exclusive(dad->ttsp,
 			CY_DA_REQUEST_EXCLUSIVE_TIMEOUT);
@@ -2146,6 +2165,188 @@ static int cyttsp4_get_panel_data_store(struct device *dev,
 cyttsp4_get_panel_data_store_exit:
 	mutex_unlock(&dad->sysfs_lock);
 	dev_vdbg(dev, "%s: return size=%d\n", __func__, size);
+	return size;
+}
+
+/*
+ * Retrieve Data Structure command
+ */
+static int _cyttsp4_retrieve_data_structure_cmd(struct device *dev,
+                u16 offset, u16 length, u8 data_id, u8 *status,
+                u8 *data_format, u16 *act_length, u8 *data)
+
+{
+        u8 cmd_buf[CY_CMD_CAT_RETRIEVE_DATA_STRUCT_CMD_SZ];
+        u8 ret_buf[CY_CMD_CAT_RETRIEVE_DATA_STRUCT_RET_SZ];
+        u16 total_read_length = 0;
+        u16 read_length;
+        u16 off_buf = 0;
+        int rc;
+	struct cyttsp4_device_access_data *dad
+                = dev_get_drvdata(dev);
+again:
+
+        cmd_buf[0] = CY_CMD_CAT_RETRIEVE_DATA_STRUCTURE;
+        cmd_buf[1] = HI_BYTE(offset);
+        cmd_buf[2] = LO_BYTE(offset);
+        cmd_buf[3] = HI_BYTE(length);
+        cmd_buf[4] = LO_BYTE(length);
+        cmd_buf[5] = data_id;
+
+	rc = cyttsp4_request_exec_cmd(dad->ttsp, CY_MODE_CAT,
+                        cmd_buf, CY_CMD_CAT_RETRIEVE_DATA_STRUCT_CMD_SZ,
+                        ret_buf, CY_CMD_CAT_RETRIEVE_DATA_STRUCT_RET_SZ,
+                        CY_DA_COMMAND_COMPLETE_TIMEOUT);
+
+        if (rc)
+                goto exit;
+
+        read_length = (ret_buf[2] << 8) + ret_buf[3];
+	if (read_length && data) {
+                /* Read data */
+                rc = cyttsp4_read(dad->ttsp, CY_MODE_CAT, CY_REG_CAT_CMD + 1 +
+                                CY_CMD_CAT_RETRIEVE_DATA_STRUCT_RET_SZ,
+                                &data[off_buf], read_length);
+                if (rc)
+                        goto exit;
+
+                total_read_length += read_length;
+
+		if (read_length < length) {
+                        offset += read_length;
+                        off_buf += read_length;
+                        length -= read_length;
+                        goto again;
+                
+		}
+	}
+
+	if (status)
+                *status = ret_buf[0];
+        if (data_format)
+                *data_format = ret_buf[4];
+        if (act_length)
+                *act_length = total_read_length;
+exit:
+        return rc;
+}
+
+static ssize_t cyttsp4_get_idac_show(struct device *dev,
+                struct device_attribute *attr, char *buf)
+{
+
+	struct cyttsp4_device_access_data *dad
+                = dev_get_drvdata(dev);
+	
+	int status = STATUS_FAIL;
+	u8 cmd_status = 0;
+	u8 data_format = 0;
+	u16 act_length = 0;
+	int length;
+	int size = 0;
+	int rc;
+	int i;
+	mutex_lock(&dad->sysfs_lock);
+	pm_runtime_get_sync(dev);
+			
+	rc = cyttsp4_request_exclusive(dad->ttsp,
+			CY_DA_REQUEST_EXCLUSIVE_TIMEOUT);
+ 
+	if (rc < 0) {
+                dev_err(dev, "%s: Error on request exclusive r=%d\n",
+                                __func__, rc);
+                goto cyttsp4_get_idac_show_err_sysfs;
+        }
+
+	rc = cyttsp4_request_set_mode(dad->ttsp, CY_MODE_CAT);
+        if (rc < 0) {
+                dev_err(dev, "%s: Error on request set mode to CAT r=%d\n",
+                                __func__, rc);
+                goto cyttsp4_get_idac_show_err_release;
+        }
+	
+        /* If device type is TMA445, set read length to max */
+	/* ic_buf[5] start of read data */ 
+	rc = _cyttsp4_retrieve_data_structure_cmd(dev, 0, READ_LENGTH_MAX,
+        	dad->get_idac_data_id, &cmd_status, &data_format,
+                &act_length, &dad->ic_buf[5]);
+
+	if (rc < 0) {
+                dev_err(dev, "%s: Error on retrieve data structure r=%d\n",
+                                __func__, rc);
+                goto set_mode_to_operational;
+        }	
+
+	dad->ic_buf[0] = cmd_status;
+        dad->ic_buf[1] = dad->get_idac_data_id;
+        dad->ic_buf[2] = HI_BYTE(act_length);
+        dad->ic_buf[3] = LO_BYTE(act_length);
+        dad->ic_buf[4] = data_format;
+
+        length = 5 + act_length;
+        status = STATUS_SUCCESS;
+
+set_mode_to_operational:
+	cyttsp4_request_set_mode(dad->ttsp, CY_MODE_OPERATIONAL);
+
+cyttsp4_get_idac_show_err_release:
+	rc = cyttsp4_release_exclusive(dad->ttsp);
+        if (rc < 0) {
+                dev_err(dev, "%s: Error on release exclusive r=%d\n",
+                                __func__, rc);
+                goto cyttsp4_get_idac_show_err_sysfs;
+        }
+
+cyttsp4_get_idac_show_err_sysfs:
+	pm_runtime_put(dev);
+	
+	size += scnprintf(buf, CY_MAX_PRBUF_SIZE, "IDAC_DATA:");
+	
+	if (status == STATUS_FAIL)
+                length = 0;
+
+	size += scnprintf(buf + size, CY_MAX_PRBUF_SIZE, "status %d\n", status);
+	
+	for (i = 0; i < length; i++) {
+                size += scnprintf(buf + size,
+                                CY_MAX_PRBUF_SIZE - size,
+                                "%02X\n", dad->ic_buf[i]);
+        }
+
+        mutex_unlock(&dad->sysfs_lock);
+
+	return size;
+}
+
+static int cyttsp4_get_idac_store(struct device *dev,
+                struct device_attribute *attr, const char *buf, size_t size)
+{
+        struct cyttsp4_device_access_data *dad = dev_get_drvdata(dev);
+        ssize_t length;
+	int rc;
+
+        mutex_lock(&dad->sysfs_lock);
+
+        length = cyttsp4_ic_parse_input(dev, buf, size, dad->ic_buf,
+                        CY_MAX_PRBUF_SIZE);
+	
+        if (length <= 0) {
+                dev_err(dev, "%s: %s Group Data store\n", __func__,
+                                "Malformed input for");
+		rc = -EINVAL;
+                goto cyttsp4_get_idac_store_exit;
+        }
+
+        /*update parameter value */
+	dad->get_idac_data_id = dad->ic_buf[0];
+cyttsp4_get_idac_store_exit:
+        mutex_unlock(&dad->sysfs_lock);
+	
+        dev_vdbg(dev, "%s: return size=%d\n", __func__, size);
+        
+	if (rc)
+        	return rc;
+
 	return size;
 }
 
@@ -2608,19 +2809,163 @@ static ssize_t cyttsp4_short_test_show(struct device *dev,
 	return ptr - buf;
 }
 
+static int prepare_print_buffer(int status, u8 *in_buf, int length,
+                u8 *out_buf)
+{
+	int index = 0;
+	int i;
+	
+	/* whisky only, 21 is the hardware number of sensors per line */
+	int newline = 21;
+        index += scnprintf(out_buf, CY_MAX_PRBUF_SIZE, "status %d\n", status);
+	index += scnprintf(out_buf + index,  CY_MAX_PRBUF_SIZE - index, "pre-fix\n");
+	
+	for (i = 0; i < 5; i++)
+		index += scnprintf(out_buf + index, CY_MAX_PRBUF_SIZE - index, "%02x ", in_buf[i]);
+	
+	index += sprintf(out_buf + index,     "\n");
+        
+	for (; i < length; i++) {
+                index += scnprintf(out_buf + index, CY_MAX_PRBUF_SIZE - index, "%05d ", in_buf[i]);
+		if((i + newline - 5 + 1) % newline == 0)
+			index += sprintf(out_buf + index,     "\n");
+        }
+	index += scnprintf(out_buf + index, CY_MAX_PRBUF_SIZE - index,
+			"length: %d \n\n\n--------------------", length - 5);
+ 
+        return index;
+}
+
+/*
+ * Get Opens Self Test Results command
+ */
+static int _cyttsp4_get_opens_self_test_results_cmd(struct device *dev,
+                u16 offset, u16 length, u8 *status, u16 *act_length, u8 *data)
+{
+        u8 cmd_buf[CY_CMD_CAT_GET_OPENS_ST_RES_CMD_SZ];
+        u8 ret_buf[CY_CMD_CAT_GET_OPENS_ST_RES_RET_SZ];
+        u16 read_length;
+        int rc;	
+	struct cyttsp4_device_access_data *dad
+                = dev_get_drvdata(dev);
+
+        cmd_buf[0] = CY_CMD_CAT_GET_SELF_TEST_RESULT;
+        cmd_buf[1] = HI_BYTE(offset);
+        cmd_buf[2] = LO_BYTE(offset);
+        cmd_buf[3] = HI_BYTE(length);
+        cmd_buf[4] = LO_BYTE(length);
+        cmd_buf[5] = CY_ST_ID_OPENS;
+
+        rc = cyttsp4_request_exec_cmd(dad->ttsp, CY_MODE_CAT,
+                        cmd_buf, CY_CMD_CAT_GET_OPENS_ST_RES_CMD_SZ,
+                        ret_buf, CY_CMD_CAT_GET_OPENS_ST_RES_RET_SZ,
+                        CY_COMMAND_COMPLETE_TIMEOUT);
+        if (rc)
+                goto exit;
+
+	read_length = (ret_buf[2] << 8) + ret_buf[3];
+	if (read_length && data) {
+	        /* Read data */
+                rc = cyttsp4_read(dad->ttsp, CY_MODE_CAT, CY_REG_CAT_CMD + 1 +
+                                CY_CMD_CAT_GET_OPENS_ST_RES_RET_SZ,
+                                data, read_length);
+                if (rc)
+                        goto exit;
+        }
+	
+        if (status)
+                *status = ret_buf[0];
+        if (act_length)
+                *act_length = read_length;
+	
+exit:
+        return rc;
+}
+
+/*
+ * Run Opens Self Test command
+ */
+static int _cyttsp4_run_opens_self_test_cmd(struct device *dev,
+                u8 write_idacs_to_flash, u8 *status, u8 *summary_result,
+                u8 *results_available)
+{
+        u8 cmd_buf[CY_CMD_CAT_RUN_OPENS_ST_CMD_SZ];
+        u8 ret_buf[CY_CMD_CAT_RUN_OPENS_ST_RET_SZ];
+        int rc;
+
+	struct cyttsp4_device_access_data *dad
+                = dev_get_drvdata(dev);
+        
+	cmd_buf[0] = CY_CMD_CAT_RUN_SELF_TEST;
+        cmd_buf[1] = CY_ST_ID_OPENS;
+        cmd_buf[2] = write_idacs_to_flash;
+
+        rc = cyttsp4_request_exec_cmd(dad->ttsp, CY_MODE_CAT,
+                        cmd_buf, CY_CMD_CAT_RUN_OPENS_ST_CMD_SZ,
+                        ret_buf, CY_CMD_CAT_RUN_OPENS_ST_RET_SZ,
+                        CY_COMMAND_COMPLETE_TIMEOUT);
+        if (rc)
+                goto exit;
+
+        if (status)
+                *status = ret_buf[0];
+        if (summary_result)
+                *summary_result = ret_buf[1];
+        if (results_available)
+                *results_available = ret_buf[2];
+exit:
+        return rc;
+}
+
+static int _cyttsp4_run_opens_self_test_tma445(struct device *dev,
+                u8 *status, u8 *summary_result)
+{
+        return _cyttsp4_run_opens_self_test_cmd(dev, 0, status,
+                        summary_result, NULL);
+}
+
+static int _cyttsp4_get_opens_self_test_results_tma445(struct device *dev,
+                u8 *status, u16 *act_length, u8 *data)
+{
+        /* Set length to 315 to read all */
+        return _cyttsp4_get_opens_self_test_results_cmd(dev, 0, 315,
+                        status, act_length, data);
+}
+	
 static ssize_t cyttsp4_open_test_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t size)
 {
 	struct cyttsp4_device_access_data *dad = dev_get_drvdata(dev);
-	if(buf[0] == '1') {
-		cyttsp4_open_test(dad);
-		msleep(100);
-		if(	cyttsp4_calibrate(dad, CY_CALI_NORMAL) < 0)
-		{
-			memset(idac_buf, 0, sizeof(idac_buf));
-		}
-	} else 
-		cyttsp4_calibrate(dad, 42);
+	u8 device_type;
+	u8 test_type;
+	u8 input_val;
+	ssize_t length;
+
+	mutex_lock(&dad->sysfs_lock);
+	
+	length = cyttsp4_ic_parse_input(dev, buf, size, dad->ic_buf,
+                        CY_MAX_PRBUF_SIZE);
+
+	/* Check device type */
+        device_type = dad->ic_buf[0];
+	test_type = dad->ic_buf[1];
+	input_val = dad->ic_buf[2];
+	dad->opens_device_type = device_type;
+        dad->opens_test_type = test_type;
+	
+	if (device_type == DEVICE_TYPE_TMA4xx) {
+		if(input_val == 1) {
+			cyttsp4_open_test(dad);
+			msleep(100);
+			if(cyttsp4_calibrate(dad, CY_CALI_NORMAL) < 0)
+			{
+				memset(idac_buf, 0, sizeof(idac_buf));
+			}
+		} else 
+			cyttsp4_calibrate(dad, 42);
+	}
+	/* return right after save device type for TMA445 */
+	mutex_unlock(&dad->sysfs_lock);
 	
 	return size;
 }
@@ -2628,15 +2973,98 @@ static ssize_t cyttsp4_open_test_store(struct device *dev,
 static ssize_t cyttsp4_open_test_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
+
 	int i;
 	char* ptr = buf;
+	int status = STATUS_FAIL;
+	u8 cmd_status = 0;
+	u8 summary_result = 0;
+	u16 act_length = 0;
+	int length;
+	int size;
+	int rc;
+	struct cyttsp4_device_access_data *dad = dev_get_drvdata(dev);
+
+	if (dad->opens_device_type == DEVICE_TYPE_TMA4xx) {
+        	for (i = 0; i < sizeof(idac_buf); i++) {
+                	if(i % 10 == 0)
+                        	ptr += sprintf(ptr, "\n");
+                	ptr += sprintf(ptr, "0x%02x ", idac_buf[i]);
+        	}
+       		return ptr - buf;
+	}
+	else if (dad->opens_device_type == DEVICE_TYPE_TMA445) {
+		mutex_lock(&dad->sysfs_lock); 
+
+		pm_runtime_get_sync(dev);
+
+		rc = cyttsp4_request_exclusive(dad->ttsp,
+				CY_DA_REQUEST_EXCLUSIVE_TIMEOUT);
+
+		if (rc < 0) {
+			dev_err(dev, "%s: Error on request exclusive r=%d\n",
+				__func__, rc);
+			goto put_pm_runtime;
+		}
+
+		rc = cyttsp4_request_set_mode(dad->ttsp, CY_MODE_CAT);
+
+		if (rc < 0) {
+			dev_err(dev, "%s: Error on request set mode to CAT r=%d\n",
+				__func__, rc);
+			goto release_exclusive;
+		}
 	
-	for (i = 0; i < sizeof(idac_buf); i++) {	
-		if(i % 10 == 0)
-			ptr += sprintf(ptr, "\n");
-		ptr += sprintf(ptr, "0x%02x ", idac_buf[i]);
-	}	
-	return ptr - buf;
+		/* Run Opens Self Test */
+		/* For TMA445 */
+		rc = _cyttsp4_run_opens_self_test_tma445(dev, &cmd_status,
+			&summary_result);
+
+		if (rc < 0) {
+                	dev_err(dev, "%s: Error on run opens self test r=%d\n",
+                                __func__, rc);
+                	goto set_mode_to_operational;
+        	}
+
+		/* Form response buffer */
+		dad->ic_buf[0] = cmd_status;
+		dad->ic_buf[1] = summary_result;
+	
+		length = 2;
+
+		rc = _cyttsp4_get_opens_self_test_results_tma445(dev,
+			&cmd_status, &act_length, &dad->ic_buf[5]);
+
+		if (rc < 0) {
+			dev_err(dev, "%s: Error on get opens self test results r=%d\n",
+				__func__, rc);
+			goto set_mode_to_operational;
+		}
+		dad->ic_buf[2] = cmd_status;
+		dad->ic_buf[3] = HI_BYTE(act_length);
+		dad->ic_buf[4] = LO_BYTE(act_length);
+		length = 5 + act_length;
+
+		status = STATUS_SUCCESS;
+
+set_mode_to_operational:
+		cyttsp4_request_set_mode(dad->ttsp, CY_MODE_OPERATIONAL);
+
+release_exclusive:
+		rc = cyttsp4_release_exclusive(dad->ttsp);
+
+put_pm_runtime:
+		pm_runtime_put(dev);
+	
+		if (status == STATUS_FAIL)
+			length = 0;
+	
+		size = prepare_print_buffer(status, dad->ic_buf, length, buf);
+	
+		mutex_unlock(&dad->sysfs_lock);
+		return size;
+	}
+	
 }
 
 static ssize_t cyttsp4_bist_show(struct device *dev,
@@ -2750,7 +3178,7 @@ static struct device_attribute attributes[] = {
 	__ATTR(open_test,		S_IRUSR | S_IWUSR,	cyttsp4_open_test_show, cyttsp4_open_test_store),
 	__ATTR(short_test,		S_IRUSR | S_IWUSR,	cyttsp4_short_test_show, cyttsp4_short_test_store),
 	__ATTR(touch_filter,	S_IWUSR,			NULL, cyttsp4_cmf_store),
-	
+	__ATTR(get_idac, 	S_IRUSR | S_IWUSR,      cyttsp4_get_idac_show, cyttsp4_get_idac_store),	
 };
 
 #ifdef CONFIG_PM_SLEEP

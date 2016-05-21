@@ -142,6 +142,19 @@ config MACH_MX6SL_WARIO
           Include support for i.MX 6Sololite Wario platform. This includes specific
           configurations for the board and its peripherals.
 
+choice
+	prompt "Wario platform sub-family"
+	depends on MACH_MX6SL_WARIO
+	default  MACH_MX6SL_WARIO_BASE
+
+config MX6SL_WARIO_BASE
+	bool "Classic Wario"
+
+config MX6SL_WARIO_WOODY
+	bool "Woody based Wario"
+
+endchoice
+
 config MACH_MX6SL_EVK
 	bool "Support i.MX 6SoloLite EVK platform"
 	select ARCH_MX6Q

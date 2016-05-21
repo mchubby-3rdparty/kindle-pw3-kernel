@@ -1,6 +1,7 @@
 /*
  * Copyright (c) 2005 MontaVista Software
  * Copyright (C) 2013 Freescale Semiconductor, Inc.
+ * Copyright 2012-2015 Amazon.com, Inc. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -29,6 +30,16 @@
 #include "ehci-fsl.h"
 #include <mach/fsl_usb.h>
 extern void usb_host_set_wakeup(struct device *wkup_dev, bool para);
+
+extern int OTG_host;
+
+static void wakeup_deep_idle_disable(struct fsl_usb2_platform_data *pdata)
+{
+           pdata->wakeup_value = 0;
+           pdata->deep_idle_enable_value = 0;
+           return;
+}
+
 static void fsl_usb_lowpower_mode(struct fsl_usb2_platform_data *pdata, bool enable)
 {
 	unsigned long flags;
@@ -59,31 +70,25 @@ static void fsl_usb_clk_gate(struct fsl_usb2_platform_data *pdata, bool enable)
  * USB EHCI low power idle mode.
  */
 
+
 #include <linux/proc_fs.h>
 #include <mach/arc_otg.h>
 #include <net/mwan.h>		/* for WAN wakeup callback */
 
+#if defined(CONFIG_WARIO_WAN) || defined (CONFIG_WARIO_WOODY_WAN)
+wan_usb_wake_callback_t usb_wake_callback = NULL;
+void *usb_wake_callback_data = NULL;
+EXPORT_SYMBOL(usb_wake_callback);
+EXPORT_SYMBOL(usb_wake_callback_data);
+#endif
+
+void (*wan_set_usb_wake_callback)(wan_usb_wake_callback_t wake_fn, void *wake_data);
 /* time in seconds required for USB to sleep if there is no activity */
-#define EHCI_NORMAL_IDLE_THRESHOLD	3
+#define EHCI_NORMAL_IDLE_THRESHOLD	5
 
 #define EHCI_HOST_WAKE_IDLE_THRESHOLD	30
 #define EHCI_IRQ_SAMPLING_RATE		1000
 #define EHCI_IDLE_SAMPLING_RATE         1000    /* time (ms) between idle loop iterations */
-
-static int wakeup_value = 0;
-static int deep_idle_enable_value = 0;
-
-static int kick_off_delayed_work = 0;
-static int in_deep_idle = 0;
-
-atomic_t ehci_irq_last_count = ATOMIC_INIT(0);
-atomic_t ehci_irq_current_count = ATOMIC_INIT(0);
-atomic_t suspended = ATOMIC_INIT(0);
-atomic_t ehci_idle_counter = ATOMIC_INIT(0);
-atomic_t ehci_idle_threshold = ATOMIC_INIT(EHCI_NORMAL_IDLE_THRESHOLD);
-
-int suspend_count = 0;
-EXPORT_SYMBOL(suspend_count);
 
 #ifdef DEBUG
 #define lpm_dbg(format, arg...)            \
@@ -95,23 +100,25 @@ EXPORT_SYMBOL(suspend_count);
 static void ehci_low_power_exit(struct fsl_usb2_platform_data *pdata)
 {
 	struct usb_hcd *hcd;
-	
-	if (wakeup_value == 0)
-		return;
 
-	if (atomic_read(&suspended) == 0) {
+	if ((OTG_host == 1) && (pdata->wakeup_value == 1)) {
+		wakeup_deep_idle_disable(pdata);
+		return;
+	}
+
+	if (atomic_read(&pdata->idle_suspended) == 0) {
 		return;
 	}
 
 	lpm_dbg("USB leaving idle mode\n");
 
-	if (in_deep_idle) {
+	if (pdata->in_deep_idle) {
 		fsl_usb_clk_gate(pdata, 1);
-		in_deep_idle = 0;
+		pdata->in_deep_idle = 0;
 	}
 
 	spin_lock_irq(&pdata->lock);
-	atomic_set(&suspended, 0);
+	atomic_set(&pdata->idle_suspended, 0);
 
 	hcd = platform_get_drvdata(pdata->pdev);
 	ehci_idle_bus_resume(hcd);
@@ -124,11 +131,16 @@ static void ehci_low_power_enter_nonatomic (struct fsl_usb2_platform_data *pdata
 {
 	struct usb_hcd *hcd;
 
-	if (atomic_read(&suspended) == 1)
+        if ((OTG_host == 1) && (pdata->wakeup_value == 1)) {
+		wakeup_deep_idle_disable(pdata);
+		return;
+         }
+
+	if (atomic_read(&pdata->idle_suspended) == 1)
 		return;
 
-	if (wakeup_value == 1) {
-		atomic_set(&suspended, 1);
+	if (pdata->wakeup_value == 1) {
+		atomic_set(&pdata->idle_suspended, 1);
 
 		lpm_dbg("USB entering idle mode\n");
 		spin_lock_irq(&pdata->lock);
@@ -141,12 +153,12 @@ static void ehci_low_power_enter_nonatomic (struct fsl_usb2_platform_data *pdata
 		ehci_idle_bus_suspend_nonatomic(hcd);
 
 		spin_lock_irq(&pdata->lock);
-		suspend_count++;
+		pdata->suspend_count++;
 		spin_unlock_irq(&pdata->lock);
 
-		if (deep_idle_enable_value) {
+		if (pdata->deep_idle_enable_value) {
 			fsl_usb_clk_gate(pdata, 0);
-			in_deep_idle = 1;
+			pdata->in_deep_idle = 1;
 		}
 	}
 }
@@ -157,25 +169,25 @@ static void ehci_idle_count(struct work_struct *work)
 		container_of(work, struct fsl_usb2_platform_data, idle_count.work);
 	unsigned long temp;
 
-	if (atomic_read(&ehci_irq_last_count) !=
-		atomic_read(&ehci_irq_current_count)) {
-			temp = atomic_read(&ehci_irq_current_count);
-			atomic_set(&ehci_irq_last_count, temp);
-			atomic_set(&ehci_idle_counter, 0);
+	if (atomic_read(&pdata->ehci_irq_last_count) !=
+		atomic_read(&pdata->ehci_irq_current_count)) {
+			temp = atomic_read(&pdata->ehci_irq_current_count);
+			atomic_set(&pdata->ehci_irq_last_count, temp);
+			atomic_set(&pdata->ehci_idle_counter, 0);
 			
 			schedule_delayed_work(&pdata->idle_count,
 					msecs_to_jiffies(EHCI_IDLE_SAMPLING_RATE));
 	}
 	else {
-		if (atomic_read(&ehci_idle_counter) >=
-			atomic_read(&ehci_idle_threshold)) {
-				atomic_set(&ehci_idle_threshold, EHCI_NORMAL_IDLE_THRESHOLD);
-				atomic_set(&ehci_idle_counter, 0);
+		if (atomic_read(&pdata->ehci_idle_counter) >=
+			atomic_read(&pdata->ehci_idle_threshold)) {
+				atomic_set(&pdata->ehci_idle_threshold, EHCI_NORMAL_IDLE_THRESHOLD);
+				atomic_set(&pdata->ehci_idle_counter, 0);
 				ehci_low_power_enter_nonatomic(pdata);
-				kick_off_delayed_work = 0;
+				pdata->kick_off_delayed_work = 0;
 		}
 		else {
-			atomic_inc(&ehci_idle_counter);
+			atomic_inc(&pdata->ehci_idle_counter);
 
 			schedule_delayed_work(&pdata->idle_count,
 					msecs_to_jiffies(EHCI_IDLE_SAMPLING_RATE));
@@ -188,11 +200,11 @@ void ehci_hcd_recalc_work(void *data)
 	struct fsl_usb2_platform_data *pdata = 
 		(struct fsl_usb2_platform_data *) data;
 
-	if (atomic_read(&suspended) == 0) {
+	if (atomic_read(&pdata->idle_suspended) == 0) {
 		return;
 	}
 
-	atomic_set(&ehci_idle_counter, 0);
+	atomic_set(&pdata->ehci_idle_counter, 0);
 	ehci_low_power_exit(pdata);
 }
 EXPORT_SYMBOL(ehci_hcd_recalc_work);
@@ -203,7 +215,7 @@ static void ehci_fsl_irq_clock_wakeup(struct work_struct *work)
 		container_of(work, struct fsl_usb2_platform_data, irq_clock_wakeup_work);
 	struct usb_hcd *hcd = platform_get_drvdata(pdata->pdev);
 
-	kick_off_delayed_work = 1;
+	pdata->kick_off_delayed_work = 1;
 	ehci_hcd_recalc_work(pdata);
 
 	schedule_delayed_work(&pdata->idle_count,
@@ -217,12 +229,19 @@ static void ehci_fsl_enqueue_clock_wakeup(struct work_struct *work)
 	struct fsl_usb2_platform_data *pdata = 
 		container_of(work, struct fsl_usb2_platform_data, enqueue_clock_wakeup_work);
 	struct usb_hcd *hcd = platform_get_drvdata(pdata->pdev);
+	int status;
 
 	ehci_hcd_recalc_work(pdata);
 
 	if (pdata->queue_saved_urb) {
-		if (ehci_urb_enqueue(hcd, pdata->queue_saved_urb, (gfp_t) pdata->queue_saved_arg)) {
-			printk(KERN_ERR "%s: Error! Enqueue urb failed!\n", __func__);
+		status = ehci_urb_enqueue(hcd, pdata->queue_saved_urb, (gfp_t) pdata->queue_saved_arg);
+		if(status){
+			printk(KERN_ERR "%s: Error! Enqueue urb failed! status:%d\n", __func__, status);
+			/*
+			  Tentative solution, normally urb is cleaned by caller, this
+			  is async, no caller
+			*/
+			usb_hcd_giveback_urb(hcd, pdata->queue_saved_urb, (int) pdata->queue_saved_arg);
 		}
 		pdata->queue_saved_urb = NULL;
 	} else {
@@ -250,8 +269,8 @@ static void ehci_fsl_dequeue_clock_wakeup(struct work_struct *work)
 
 static void ehci_hcd_restart_idle(struct fsl_usb2_platform_data *pdata)
 {
-	if ((atomic_read(&suspended) == 0) && suspend_count) {
-		atomic_set(&ehci_idle_counter, 0);
+	if ((atomic_read(&pdata->idle_suspended) == 0) && pdata->suspend_count) {
+		atomic_set(&pdata->ehci_idle_counter, 0);
 		schedule_delayed_work(&pdata->idle_count,
 			msecs_to_jiffies(EHCI_IDLE_SAMPLING_RATE));
 	}
@@ -260,7 +279,9 @@ static void ehci_hcd_restart_idle(struct fsl_usb2_platform_data *pdata)
 static ssize_t
 deep_idle_enable_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
-	return sprintf(buf, "%d\n", deep_idle_enable_value);
+	struct fsl_usb2_platform_data *pdata = dev->platform_data;
+
+	return sprintf(buf, "%d\n", pdata->deep_idle_enable_value);
 }
 
 static ssize_t
@@ -269,15 +290,20 @@ deep_idle_enable_store(struct device *dev, struct device_attribute *attr,
 {
 	struct fsl_usb2_platform_data *pdata = dev->platform_data;
 
-	if (strstr(buf, "1") != NULL && wakeup_value == 1) {
-		deep_idle_enable_value = 1;
+        if (OTG_host == 1) {
+		pdata->deep_idle_enable_value = 0;
+		return size;
+        }
+
+	if (strstr(buf, "1") != NULL && pdata->wakeup_value == 1) {
+		pdata->deep_idle_enable_value = 1;
 
 		ehci_hcd_recalc_work(pdata);
 		ehci_hcd_restart_idle(pdata);
 	}
 	else {
 		ehci_hcd_recalc_work(pdata);
-		deep_idle_enable_value = 0;
+		pdata->deep_idle_enable_value = 0;
 	}
 	return size;
 }
@@ -286,7 +312,9 @@ static DEVICE_ATTR(deep_idle_enable, 0644, deep_idle_enable_show, deep_idle_enab
 static ssize_t
 wakeup_enable_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
-	return sprintf(buf, "%d\n", wakeup_value);
+	struct fsl_usb2_platform_data *pdata = dev->platform_data;
+
+	return sprintf(buf, "%d\n", pdata->wakeup_value);
 }
 
 static ssize_t
@@ -295,15 +323,23 @@ wakeup_enable_store(struct device *dev, struct device_attribute *attr,
 {
 	struct fsl_usb2_platform_data *pdata = dev->platform_data;
 
+	if (OTG_host == 1) {
+		pdata->wakeup_value = 0;
+		return size;
+	}
+
 	if (strstr(buf, "1") != NULL) {
-		wakeup_value = 1;
-		wan_set_usb_wake_callback(ehci_hcd_recalc_work, pdata);
+		pdata->wakeup_value = 1;
+#if defined(CONFIG_WARIO_WAN) || defined(CONFIG_WARIO_WOODY_WAN)
+		usb_wake_callback = ehci_hcd_recalc_work;
+		usb_wake_callback_data = pdata;
+#endif
 		ehci_hcd_restart_idle(pdata);
 	}
 	else {
 		ehci_hcd_recalc_work(pdata);
-		deep_idle_enable_value = 0;
-		wakeup_value = 0;
+		pdata->deep_idle_enable_value = 0;
+		pdata->wakeup_value = 0;
 	}
 
 	return size;
@@ -313,7 +349,9 @@ static DEVICE_ATTR(wakeup_enable, 0644, wakeup_enable_show, wakeup_enable_store)
 static ssize_t suspend_counter_show(struct device *dev, struct device_attribute *attr,
 			char *buf)
 {
-	return sprintf(buf, "%d\n", suspend_count);
+	struct fsl_usb2_platform_data *pdata = dev->platform_data;
+
+	return sprintf(buf, "%d\n", pdata->suspend_count);
 }
 static DEVICE_ATTR(suspend_counter, 0644, suspend_counter_show, NULL);
 
@@ -430,12 +468,10 @@ static irqreturn_t ehci_fsl_pre_irq(int irq, void *dev)
 		fsl_usb_recover_hcd(pdev);
 		return IRQ_HANDLED;
 	} else {
-		u32 portsc = 0;
-		struct ehci_hcd *ehci = hcd_to_ehci(hcd);
 
-#ifdef CONFIG_LAB126
-		atomic_inc(&ehci_irq_current_count);
-		if (kick_off_delayed_work == 0) {
+#if defined(CONFIG_LAB126)
+		atomic_inc(&pdata->ehci_irq_current_count);
+		if (pdata->kick_off_delayed_work == 0) {
 
 			/* Can't reenable clock in IRQ context */
 			disable_irq_nosync(hcd->irq);
@@ -444,13 +480,6 @@ static irqreturn_t ehci_fsl_pre_irq(int irq, void *dev)
 		}
 #endif /* CONFIG_LAB126 */
 
-		portsc = ehci_readl(ehci, &ehci->regs->port_status[0]);
-		/* PORT_USB11 macro is used to judge line state K*/
-		if ((PORT_USB11(portsc)) && (portsc & PORT_SUSPEND)) {
-			pdata = hcd->self.controller->platform_data;
-			if (pdata->platform_resume)
-				pdata->platform_resume(pdata);
-		}
 	}
 	return IRQ_NONE;
 }
@@ -538,11 +567,12 @@ int usb_hcd_fsl_probe(const struct hc_driver *driver,
 	 * do platform specific init: check the clock, grab/config pins, etc.
 	 */
 	if (pdata->init && pdata->init(pdev)) {
-		pdata->lowpower = false;
+		
 		retval = -ENODEV;
 		goto err4;
 	}
-
+	pdata->lowpower = false;
+	
 	spin_lock_init(&pdata->lock);
 
 	/* Make sure that the PHY gets turned on */
@@ -565,8 +595,10 @@ int usb_hcd_fsl_probe(const struct hc_driver *driver,
 		}
 
 		retval = otg_set_host(ehci->transceiver, &ehci_to_hcd(ehci)->self);
-		if (retval)
+		if (retval) {
 			otg_put_transceiver(ehci->transceiver);
+			ehci->transceiver = NULL;
+		}
 	} else if ((pdata->operating_mode == FSL_USB2_MPH_HOST) || \
 			(pdata->operating_mode == FSL_USB2_DR_HOST))
 		fsl_platform_set_vbus_power(pdata, 1);
@@ -586,6 +618,18 @@ int usb_hcd_fsl_probe(const struct hc_driver *driver,
 	INIT_WORK(&pdata->irq_clock_wakeup_work, ehci_fsl_irq_clock_wakeup);
 	INIT_WORK(&pdata->enqueue_clock_wakeup_work, ehci_fsl_enqueue_clock_wakeup);
 	INIT_WORK(&pdata->dequeue_clock_wakeup_work, ehci_fsl_dequeue_clock_wakeup);
+
+	atomic_set(&pdata->ehci_irq_last_count,0);
+	atomic_set(&pdata->ehci_irq_current_count,0);
+	atomic_set(&pdata->idle_suspended,0);
+	atomic_set(&pdata->ehci_idle_counter,0);
+	atomic_set(&pdata->ehci_idle_threshold,0);
+
+	pdata->suspend_count = 0;
+	pdata->wakeup_value = 0;
+	pdata->deep_idle_enable_value = 0;
+	pdata->kick_off_delayed_work = 0;
+	pdata->in_deep_idle = 0;
 
 #endif /* CONFIG_LAB126 */
 
@@ -614,7 +658,6 @@ int usb_hcd_fsl_probe(const struct hc_driver *driver,
 
 	ehci = hcd_to_ehci(hcd);
 	pdata->pm_command = ehci->command;
-
 	return retval;
 err6:
 	free_irq(irq, (void *)pdev);
@@ -625,6 +668,7 @@ err5:
 	device_remove_file(&pdev->dev, &dev_attr_deep_idle_enable);
 #endif /* CONFIG_LAB126 */
 	otg_put_transceiver(ehci->transceiver);
+	ehci->transceiver = NULL;
 err4:
 	iounmap(hcd->regs);
 err3:
@@ -634,7 +678,10 @@ err2:
 	usb_put_hcd(hcd);
 err1:
 	dev_err(&pdev->dev, "init %s fail, %d\n", dev_name(&pdev->dev), retval);
-	if (pdata->exit)
+	fsl_usb_lowpower_mode(pdata, true);
+	if (pdata->usb_clock_for_pm)
+		pdata->usb_clock_for_pm(false);
+	if (pdata->exit && pdata->pdev)
 		pdata->exit(pdata->pdev);
 	return retval;
 }
@@ -650,8 +697,12 @@ err1:
 static void usb_hcd_fsl_remove(struct usb_hcd *hcd,
 			       struct platform_device *pdev)
 {
-	struct ehci_hcd *ehci = hcd_to_ehci(hcd);
-	struct fsl_usb2_platform_data *pdata = pdev->dev.platform_data;
+	struct ehci_hcd *ehci; 
+	struct fsl_usb2_platform_data *pdata;
+	printk(KERN_INFO "%d %s %p %p", __LINE__, __func__, hcd, pdev);
+	ehci = hcd_to_ehci(hcd);
+	pdata = pdev->dev.platform_data;
+	printk(KERN_INFO "%d %s %p %p", __LINE__, __func__, ehci, pdata);
 
 	if (!test_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags)) {
 		/* Need open clock for register access */
@@ -675,10 +726,11 @@ static void usb_hcd_fsl_remove(struct usb_hcd *hcd,
 	ehci_port_power(ehci, 0);
 
 	iounmap(hcd->regs);
-
+	dev_info(&pdev->dev, "%s ehci->transceiver %p", __func__, ehci->transceiver);
 	if (ehci->transceiver) {
 		(void)otg_set_host(ehci->transceiver, 0);
 		otg_put_transceiver(ehci->transceiver);
+		ehci->transceiver = NULL;
 	} else {
 		release_mem_region(hcd->rsrc_start, hcd->rsrc_len);
 	}
@@ -767,8 +819,7 @@ static int ehci_fsl_bus_suspend(struct usb_hcd *hcd)
 	struct ehci_hcd *ehci = hcd_to_ehci(hcd);
 
 	pdata = hcd->self.controller->platform_data;
-	printk(KERN_DEBUG "%s begins, %s\n", __func__, pdata->name);
-
+	lpm_dbg("%s begins, %s\n", __func__, pdata->name);
 	/* the host is already at low power mode */
 	if (!test_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags)) {
 		return 0;
@@ -793,9 +844,11 @@ static int ehci_fsl_bus_suspend(struct usb_hcd *hcd)
 		pdata->platform_suspend(pdata);
 	usb_host_set_wakeup(hcd->self.controller, true);
 	fsl_usb_lowpower_mode(pdata, true);
+	mdelay(10);
 	fsl_usb_clk_gate(hcd->self.controller->platform_data, false);
 	clear_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags);
-	printk(KERN_DEBUG "%s ends, %s\n", __func__, pdata->name);
+
+	lpm_dbg("%s ends, %s\n", __func__, pdata->name);
 
 	return ret;
 }
@@ -806,7 +859,7 @@ static int ehci_fsl_bus_resume(struct usb_hcd *hcd)
 	struct fsl_usb2_platform_data *pdata;
 
 	pdata = hcd->self.controller->platform_data;
-	printk(KERN_DEBUG "%s begins, %s\n", __func__, pdata->name);
+	lpm_dbg("%s begins, %s\n", __func__, pdata->name);
 
 	/*
 	 * At otg mode, it should not call host resume for usb gadget device
@@ -829,7 +882,7 @@ static int ehci_fsl_bus_resume(struct usb_hcd *hcd)
 	ret = ehci_bus_resume(hcd);
 	if (ret)
 		return ret;
-	printk(KERN_DEBUG "%s ends, %s\n", __func__, pdata->name);
+	lpm_dbg("%s ends, %s\n", __func__, pdata->name);
 
 	return ret;
 }
@@ -914,7 +967,10 @@ static void ehci_fsl_stop(struct usb_hcd *hcd)
 
 	/* prevent mwan from waking up USB because module */
 	/* is no longer available to respond to callback  */
-	wan_set_usb_wake_callback(NULL, NULL);
+#if defined(CONFIG_WARIO_WAN) || defined(CONFIG_WARIO_WOODY_WAN)
+	usb_wake_callback = NULL;
+	usb_wake_callback_data = NULL;
+#endif	
 	cancel_delayed_work_sync(&pdata->idle_count);
 #endif /* CONFIG_LAB126 */
 
@@ -928,7 +984,7 @@ static int ehci_fsl_urb_enqueue(struct usb_hcd *hcd, struct urb *urb, gfp_t mem_
 	pdata = hcd->self.controller->platform_data;
 
 	/* Check to see if clock is suspended */
-	if (atomic_read(&suspended) != 0) {
+	if (atomic_read(&pdata->idle_suspended) != 0) {
 
 		/* Can't enable clocks in sw interrupt context */
 		if (in_interrupt()) {
@@ -958,7 +1014,7 @@ static int ehci_fsl_urb_dequeue(struct usb_hcd *hcd, struct urb *urb, int status
 	pdata = hcd->self.controller->platform_data;
 
 	/* Check to see if clock is suspended */
-	if (atomic_read(&suspended) != 0) {
+	if (atomic_read(&pdata->idle_suspended) != 0) {
 
 		/* Can't enable clocks in sw interrupt context */
 		if (in_interrupt()) {
@@ -1054,7 +1110,7 @@ static bool host_can_wakeup_system(struct platform_device *pdev)
 	struct fsl_usb2_platform_data *pdata = pdev->dev.platform_data;
 
 	if (pdata->operating_mode == FSL_USB2_DR_OTG)
-		if (device_may_wakeup(ehci->transceiver->dev))
+		if(ehci && ehci->transceiver && ehci->transceiver->dev && device_may_wakeup(ehci->transceiver->dev))
 			return true;
 		else
 			return false;
@@ -1083,7 +1139,7 @@ static int ehci_fsl_drv_suspend(struct platform_device *pdev,
 	u32 port_status;
 	struct fsl_usb2_platform_data *pdata = pdev->dev.platform_data;
 
-	printk(KERN_DEBUG "USB Host suspend begins\n");
+	lpm_dbg( "USB Host suspend begins\n");
 
 #ifdef CONFIG_LAB126
 	ehci_hcd_recalc_work(pdata);
@@ -1091,7 +1147,7 @@ static int ehci_fsl_drv_suspend(struct platform_device *pdev,
 
 	/* Only handles OTG mode switch event, system suspend event will be done in bus suspend */
 	if (pdata->pmflags == 0) {
-		printk(KERN_DEBUG "%s, pm event \n", __func__);
+		lpm_dbg( "%s, pm event \n", __func__);
 		disable_irq(hcd->irq);
 		if (!host_can_wakeup_system(pdev)) {
 			/* Need open clock for register access */
@@ -1119,7 +1175,7 @@ static int ehci_fsl_drv_suspend(struct platform_device *pdev,
 		}
 		enable_irq(hcd->irq);
 
-		printk(KERN_DEBUG "host suspend ends\n");
+		lpm_dbg( "host suspend ends\n");
 		return 0;
 	}
 
@@ -1128,7 +1184,7 @@ static int ehci_fsl_drv_suspend(struct platform_device *pdev,
 	usb_lock_device(roothub);
 	if (roothub->children[0] != NULL) {
 		int old = hcd->self.is_b_host;
-		printk(KERN_DEBUG "will resume roothub and its children\n");
+		lpm_dbg( "will resume roothub and its children\n");
 		hcd->self.is_b_host = 0;
 		/* resume the roothub, so that it can test the children is disconnected */
 		if (roothub->state == USB_STATE_SUSPENDED)
@@ -1146,7 +1202,7 @@ static int ehci_fsl_drv_suspend(struct platform_device *pdev,
 	usb_unlock_device(roothub);
 
 	if (!(hcd->state & HC_STATE_SUSPENDED)) {
-		printk(KERN_DEBUG "will suspend roothub and its children\n");
+		lpm_dbg( "will suspend roothub and its children\n");
 		usb_lock_device(roothub);
 		usb_suspend(&roothub->dev, PMSG_USER_SUSPEND);
 		usb_unlock_device(roothub);
@@ -1185,9 +1241,12 @@ static int ehci_fsl_drv_suspend(struct platform_device *pdev,
 		fsl_usb_clk_gate(hcd->self.controller->platform_data, false);
 	}
 	pdata->pmflags = 0;
-	printk(KERN_DEBUG "host suspend ends\n");
+	lpm_dbg( "host suspend ends\n");
+
 	return 0;
 }
+
+extern int max77696_uic_is_otg_connected(void);
 
 static int ehci_fsl_drv_resume(struct platform_device *pdev)
 {
@@ -1195,39 +1254,63 @@ static int ehci_fsl_drv_resume(struct platform_device *pdev)
 	struct ehci_hcd *ehci = hcd_to_ehci(hcd);
 	struct usb_device *roothub = hcd->self.root_hub;
 	unsigned long flags;
-	u32 tmp;
+	u32 __iomem	*reg_ptr;
+	u32 tmp; 
+#ifndef CONFIG_LAB126	
+	u32 otgsc;
+	bool id_changed;
+	int id_value;
+#endif
 	struct fsl_usb2_platform_data *pdata = pdev->dev.platform_data;
 	struct fsl_usb2_wakeup_platform_data *wake_up_pdata = pdata->wakeup_pdata;
 	/* Only handles OTG mode switch event */
-	printk(KERN_DEBUG "ehci fsl drv resume begins: %s\n", pdata->name);
+	lpm_dbg( "ehci fsl drv resume begins: %s\n", pdata->name);
 	if (pdata->pmflags == 0) {
-		printk(KERN_DEBUG "%s,pm event, wait for wakeup irq if needed\n", __func__);
+		lpm_dbg( "%s,pm event, wait for wakeup irq if needed\n", __func__);
 		wait_event_interruptible(wake_up_pdata->wq, !wake_up_pdata->usb_wakeup_is_pending);
 		disable_irq(hcd->irq);
 		if (!host_can_wakeup_system(pdev)) {
 			/* Need open clock for register access */
 			fsl_usb_clk_gate(hcd->self.controller->platform_data, true);
+
+			reg_ptr = (u32 __iomem *)(((u8 __iomem *)ehci->regs) + USBMODE);
+			tmp = ehci_readl(ehci, reg_ptr);
+
+			/* quit, if not in host mode */
+			if ((tmp & USBMODE_CM_HC) != USBMODE_CM_HC) {
+				usb_host_set_wakeup(hcd->self.controller, true);
+				fsl_usb_clk_gate(hcd->self.controller->platform_data, false);
+				enable_irq(hcd->irq);
+				return 0;
+			}
 			fsl_usb_lowpower_mode(pdata, false);
 
-			usb_host_set_wakeup(hcd->self.controller, true);
-
-#ifndef NO_FIX_DISCONNECT_ISSUE
-			/*Unplug&plug device during suspend without remote wakeup enabled
-			For Low and full speed device, we should power on and power off
-			the USB port to make sure USB internal state machine work well.
-			*/
 			tmp = ehci_readl(ehci, &ehci->regs->port_status[0]);
-			if ((tmp & PORT_CONNECT) && !(tmp & PORT_SUSPEND) &&
-				((tmp & (0x3<<26)) != (0x2<<26))) {
-					printk(KERN_DEBUG "%s will do power off and power on port.\n", pdata->name);
-					ehci_writel(ehci, tmp & ~(PORT_RWC_BITS | PORT_POWER),
-						&ehci->regs->port_status[0]);
-					ehci_writel(ehci, tmp | PORT_POWER,
-						&ehci->regs->port_status[0]);
-			}
+			if (pdata->operating_mode == FSL_USB2_DR_OTG) {
+#ifndef CONFIG_LAB126
+				otgsc = ehci_readl(ehci, (u32 __iomem *)ehci->regs + OTGSC_OFFSET / 4);
+				id_changed = !!(otgsc & OTGSC_ID_INT_STS);
+				id_value = !!(otgsc & OTGSC_ID_VALUE);
+				if (((tmp & PORT_CONNECT) && !id_value) || id_changed) {
+#else
+				if ((tmp & PORT_CONNECT) && max77696_uic_is_otg_connected()) {
 #endif
-			fsl_usb_lowpower_mode(pdata, true);
-			fsl_usb_clk_gate(hcd->self.controller->platform_data, false);
+					set_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags);
+				} else if (!(tmp & PORT_CONNECT)) {
+					usb_host_set_wakeup(hcd->self.controller, true);
+					fsl_usb_lowpower_mode(pdata, true);
+					fsl_usb_clk_gate(hcd->self.controller->platform_data, false);
+				}
+			} else {
+				if (tmp & PORT_CONNECT) {
+					set_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags);
+				} else {
+					usb_host_set_wakeup(hcd->self.controller, true);
+					fsl_usb_lowpower_mode(pdata, true);
+					fsl_usb_clk_gate(hcd->self.controller->platform_data, false);
+				}
+
+			}
 		}
 		enable_irq(hcd->irq);
 		return 0;
@@ -1262,13 +1345,13 @@ static int ehci_fsl_drv_resume(struct platform_device *pdev)
 	spin_unlock_irqrestore(&ehci->lock, flags);
 
 	if ((hcd->state & HC_STATE_SUSPENDED)) {
-		printk(KERN_DEBUG "will resume roothub and its children\n");
+		lpm_dbg( "will resume roothub and its children\n");
 		usb_lock_device(roothub);
 		usb_resume(&roothub->dev, PMSG_USER_RESUME);
 		usb_unlock_device(roothub);
 	}
 	pdata->pmflags = 0;
-	printk(KERN_DEBUG "ehci fsl drv resume ends: %s\n", pdata->name);
+	lpm_dbg( "ehci fsl drv resume ends: %s\n", pdata->name);
 
 	return 0;
 }

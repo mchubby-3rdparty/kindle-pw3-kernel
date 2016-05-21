@@ -10,6 +10,7 @@
 #include <asm/io.h>
 #include "include/iomux_define.h"
 #include "include/iomux_register.h"
+#include <mach/boardid.h>
 
 // Function to config iomux for instance uart2.
 void uart2_iomux_config(void)
@@ -31,7 +32,12 @@ void uart2_iomux_config(void)
     //     ALT4 (4) - Select mux mode: ALT4 mux port: RXD_MUX of instance: uart2.
     //                NOTE: - Config Register IOMUXC_UART2_IPP_UART_RXD_MUX_SELECT_INPUT for mode ALT4.
     //     ALT5 (5) - Select mux mode: ALT5 mux port: GPIO[16] of instance: gpio2.
-    __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT4 & 0x7), IOMUXC_SW_MUX_CTL_PAD_LCD_ENABLE);
+    if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+        lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+    	__raw_writel((SION_DISABLED & 0x1) << 4 | (ALT5 & 0x7), IOMUXC_SW_MUX_CTL_PAD_LCD_ENABLE);
+    } else {
+    	__raw_writel((SION_DISABLED & 0x1) << 4 | (ALT4 & 0x7), IOMUXC_SW_MUX_CTL_PAD_LCD_ENABLE);
+   
     // Pad LCD_ENABLE is involved in Daisy Chain.
     // Input Select Register:
     // IOMUXC_UART2_IPP_UART_RXD_MUX_SELECT_INPUT(0x020E0804)
@@ -44,7 +50,8 @@ void uart2_iomux_config(void)
     //     SEL_LCD_HSYNC_ALT4 (3) - Selecting Pad: LCD_HSYNC for Mode: ALT4.
     //     SEL_SD2_DAT4_ALT2 (4) - Selecting Pad: SD2_DAT4 for Mode: ALT2.
     //     SEL_SD2_DAT5_ALT2 (5) - Selecting Pad: SD2_DAT5 for Mode: ALT2.
-    __raw_writel((SEL_EPDC_D12_ALT1 & 0x7), IOMUXC_UART2_IPP_UART_RXD_MUX_SELECT_INPUT);
+       __raw_writel((SEL_EPDC_D12_ALT1 & 0x7), IOMUXC_UART2_IPP_UART_RXD_MUX_SELECT_INPUT);
+    }
     // Pad Control Register:
     // IOMUXC_SW_PAD_CTL_PAD_LCD_ENABLE(0x020E0518)
     //   LVE (22) - Low Voltage Enable Field Reset: LVE_DISABLED
@@ -93,7 +100,14 @@ void uart2_iomux_config(void)
     //             Select one out of next values for pad: LCD_ENABLE.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_DISABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PU & 0x3) << 14 |
-           (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
-           (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_LCD_ENABLE);
+    if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+        lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+        __raw_writel((LVE_ENABLED& 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+        (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+        (SPD_50MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_LCD_ENABLE);
+    } else {
+        __raw_writel((LVE_DISABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PU & 0x3) << 14 |
+        (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+        (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_LCD_ENABLE);
+    }
 }

@@ -60,6 +60,10 @@
 #include "epdc_regs.h"
 #include <asm/cacheflush.h>
 
+#ifdef CONFIG_FALCON
+#include <linux/falconmem.h>
+#endif
+
 #ifdef CONFIG_FB_MXC_EINK_REAGL_MODULE
 #define CONFIG_FB_MXC_EINK_REAGL
 #endif // CONFIG_FB_MXC_EINK_REAGL_MODULE
@@ -420,6 +424,7 @@ struct fb_res_mem resolution_memory_map[] =
 	{ 256, 800 , 600 ,  3},
 	{ 256, 1024, 758 ,  3},
 	{ 512, 1448, 1072,  6},
+	{ 508, 1072, 1448,  6}, //whisky, taking 4M away reserved for working buffer A
 };
 
 #endif /* CONFIG_LAB126 */
@@ -1407,11 +1412,22 @@ static int epdc_powerup(struct mxc_epdc_fb_data *fb_data)
 	return 1;
 }
 
-static inline int epdc_powerup_wait_for_enabled(struct mxc_epdc_fb_data *fb_data)
+static int epdc_powerup_wait_for_enabled(struct mxc_epdc_fb_data *fb_data)
 {
+	int ret;
 	if (wait_for_completion_timeout(&fb_data->powerup_compl, msecs_to_jiffies(PWRUP_TIMEOUT)))
 	{
 		dev_dbg(fb_data->dev, "%s: Power UP completion received\n", __FUNCTION__);
+		return 1;
+	}
+
+	ret = regulator_is_enabled(fb_data->display_regulator);
+	if (ret < 0) {
+		dev_err(fb_data->dev, "Unable to get regulator_is_enabled"
+			"err = 0x%x\n", ret);
+	} else if (ret > 0) {
+		dev_err(fb_data->dev, "%s: Power UP timed out but actually enabled\n", __FUNCTION__);
+		complete(&fb_data->powerup_compl);
 		return 1;
 	}
 
@@ -3125,7 +3141,9 @@ static void epdc_submit_work_func(struct work_struct *work)
 #ifdef CONFIG_FB_MXC_EINK_REAGL
 			__raw_writel(reagl_algos[fb_data->which_reagl].buffer_tce, EPDC_WB_ADDR_TCE);
 #else
+#if defined(CONFIG_LAB126) && defined(CONFIG_FB_MXC_EINK_WORK_BUFFER_B)
 			__raw_writel(fb_data->working_buffer_B_phys, EPDC_WB_ADDR_TCE);
+#endif
 #endif // CONFIG_FB_MXC_EINK_REAGL
 	} else {
 		__raw_writel(fb_data->working_buffer_A_phys, EPDC_WB_ADDR_TCE);
@@ -4268,7 +4286,6 @@ static void do_paused_update(struct mxc_epdc_fb_data *fb_data, int is_cancelled)
 		if (!epdc_powerup_wait_for_enabled(fb_data)) {
 			mutex_lock(&fb_data->power_mutex);
 			dev_err(fb_data->dev, "Powerup timeout!!\n");
-			regulator_disable(fb_data->display_regulator);
 			fb_data->power_state = POWER_STATE_OFF;
 			mutex_unlock(&fb_data->power_mutex);
 			return;
@@ -5570,6 +5587,18 @@ static ssize_t mxc_epdc_reagl_store(struct device *dev, struct device_attribute 
 static DEVICE_ATTR(mxc_epdc_reagl, 0666, mxc_epdc_reagl_show, mxc_epdc_reagl_store);
 #endif // CONFIG_FB_MXC_EINK_REAGL
 
+static ssize_t mxc_epdc_wvaddr_show(struct device *dev, struct device_attribute *attr,
+		char *buf)
+{
+	struct fb_info *info = dev_get_drvdata(dev);
+	struct mxc_epdc_fb_data *fb_data = (struct mxc_epdc_fb_data *)info;
+
+	clk_enable(fb_data->epdc_clk_axi);
+	sprintf(buf,"0x%08X", __raw_readl(EPDC_WVADDR));
+	clk_disable(fb_data->epdc_clk_axi);
+	return strlen(buf);
+}
+static DEVICE_ATTR(mxc_epdc_wvaddr, 0666, mxc_epdc_wvaddr_show, NULL);
 
 static ssize_t mxc_epdc_regs_show(struct device *dev, struct device_attribute *attr,
 		char *buf)
@@ -6104,7 +6133,9 @@ int __devinit mxc_epdc_fb_probe(struct platform_device *pdev)
 		fb_data->phys_addr_updbuf[i] =
 				virt_to_phys(fb_data->virt_addr_updbuf[i]);
 
-
+#ifdef CONFIG_FALCON
+		falcon_add_preload_kernel_range((u32)fb_data->virt_addr_updbuf[i], fb_data->max_pix_size);
+#endif
 		if (fb_data->virt_addr_updbuf[i] == NULL) {
 			ret = -ENOMEM;
 			goto out_upd_buffers;
@@ -6134,6 +6165,15 @@ int __devinit mxc_epdc_fb_probe(struct platform_device *pdev)
 
 	fb_data->working_buffer_size = vmode->yres * vmode->xres * 2;
 	/* Allocate EPDC working buffer A (main WB Processing buffer) */
+#ifdef CONFIG_FB_MXC_EINK_WORK_BUFFER_RESERVED
+	fb_data->working_buffer_A_phys = CONFIG_FB_MXC_EINK_WORK_BUFFER_ADDR;
+	fb_data->working_buffer_A_virt = ioremap_cached(fb_data->working_buffer_A_phys, CONFIG_FB_MXC_EINK_WORK_BUFFER_SIZE);
+	if(CONFIG_FB_MXC_EINK_WORK_BUFFER_SIZE < fb_data->working_buffer_size) {
+		dev_err(&pdev->dev, "Reserved Working buffer is too small\n");
+		ret = -ENOMEM;
+		goto out_copybuffer;
+	}
+#else
 	fb_data->working_buffer_A_virt =
 		kmalloc(fb_data->working_buffer_size, GFP_KERNEL);
 	fb_data->working_buffer_A_phys =
@@ -6143,6 +6183,7 @@ int __devinit mxc_epdc_fb_probe(struct platform_device *pdev)
 		ret = -ENOMEM;
  		goto out_copybuffer;
  	}
+#endif // CONFIG_FB_MXC_EINK_WORK_BUFFER_RESERVED
 
 #if defined(CONFIG_LAB126) && defined(CONFIG_FB_MXC_EINK_WORK_BUFFER_B)
 	/* Allocate EPDC working buffer B (post-waveform algorithm) */
@@ -6335,6 +6376,9 @@ int __devinit mxc_epdc_fb_probe(struct platform_device *pdev)
 
 	if (device_create_file(&pdev->dev, &dev_attr_mxc_epdc_waveform_modes) < 0)
 		dev_err(&pdev->dev, "Unable to create mxc_epdc_waveform_modes file\n");
+
+	if (device_create_file(&pdev->dev, &dev_attr_mxc_epdc_wvaddr) < 0)
+		dev_err(&pdev->dev, "Unable to create mxc_epdc_wvaddr file\n");
 
 #ifdef CONFIG_FB_MXC_EINK_REAGL
 	if (device_create_file(&pdev->dev, &dev_attr_mxc_epdc_reagl) < 0)
@@ -6541,6 +6585,7 @@ out_sysfs:
 	device_remove_file(&pdev->dev, &dev_attr_mxc_epdc_temperature);
 	device_remove_file(&pdev->dev, &dev_attr_mxc_epdc_voltcontrol);
 	device_remove_file(&pdev->dev, &dev_attr_mxc_epdc_waveform_modes);
+	device_remove_file(&pdev->dev, &dev_attr_mxc_epdc_wvaddr);
 #ifdef CONFIG_FB_MXC_EINK_REAGL
 	device_remove_file(&pdev->dev, &dev_attr_mxc_epdc_reagl);
 #endif // CONFIG_FB_MXC_EINK_REAGL
@@ -6576,8 +6621,11 @@ out_dma_work_buf_B:
 	kfree(fb_data->working_buffer_B_virt);
 out_dma_work_buf_A:
 #endif // CONFIG_FB_MXC_EINK_WORK_BUFFER_B
+#ifndef CONFIG_FB_MXC_EINK_WORK_BUFFER_RESERVED
 	kfree(fb_data->working_buffer_A_virt);
-
+#else
+	iounmap(fb_data->working_buffer_A_virt);
+#endif // CONFIG_FB_MXC_EINK_WORK_BUFFER_RESERVED
 	if (fb_data->pdata->put_pins)
 		fb_data->pdata->put_pins();
 out_copybuffer:
@@ -6636,6 +6684,7 @@ static int mxc_epdc_fb_remove(struct platform_device *pdev)
 	device_remove_file(&pdev->dev, &dev_attr_mxc_epdc_temperature);
 	device_remove_file(&pdev->dev, &dev_attr_mxc_epdc_voltcontrol);
 	device_remove_file(&pdev->dev, &dev_attr_mxc_epdc_waveform_modes);
+	device_remove_file(&pdev->dev, &dev_attr_mxc_epdc_wvaddr);
 #ifdef CONFIG_FB_MXC_EINK_REAGL
 	device_remove_file(&pdev->dev, &dev_attr_mxc_epdc_reagl);
 #endif // CONFIG_FB_MXC_EINK_REAGL
@@ -6689,8 +6738,11 @@ static int mxc_epdc_fb_remove(struct platform_device *pdev)
 		kfree(fb_data->virt_addr_updbuf);
 	if (fb_data->phys_addr_updbuf != NULL)
 		kfree(fb_data->phys_addr_updbuf);
-
+#ifndef CONFIG_FB_MXC_EINK_WORK_BUFFER_RESERVED
 	kfree(fb_data->working_buffer_A_virt);
+#else
+	iounmap(fb_data->working_buffer_A_virt);
+#endif // CONFIG_FB_MXC_EINK_WORK_BUFFER_RESERVED
 #if defined(CONFIG_LAB126) && defined(CONFIG_FB_MXC_EINK_WORK_BUFFER_B)
 	kfree(fb_data->working_buffer_B_virt);
 #endif // CONFIG_FB_MXC_EINK_WORK_BUFFER_B

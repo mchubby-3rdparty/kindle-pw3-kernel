@@ -183,6 +183,13 @@ config CHARGER_MAX77696
 	  Say Y here to enable support for the battery charger in
 	  MAX77696 PMIC.
 
+config POWER_SODA
+	bool "SODA CHARGER & BATTERY"
+	default n
+	depends on MACH_MX6SL_WARIO && MX6SL_WARIO_WOODY
+	help
+	  Say Y here to enable support for the soda charger.
+
 config BATTERY_Z2
 	tristate "Z2 battery driver"
 	depends on I2C && MACH_ZIPIT2

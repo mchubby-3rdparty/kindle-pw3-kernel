@@ -638,7 +638,7 @@ dev_qualifier = {
 
 static inline int send_offline_uevent(struct fsg_dev *fsg, int unplug_unsafe) {
 
-	DBG(fsg, "\n%s:%d 0x%lx unsafe %d", __FUNCTION__,__LINE__,fsg->atomic_bitflags, unplug_unsafe);
+	printk(KERN_INFO"\n%s:%d fsg_ 0x%lx unsafe %d recovery_mode:%d\n", __FUNCTION__,__LINE__,fsg->atomic_bitflags, unplug_unsafe, mod_data.recovery_mode);
 	
 	if (!mod_data.recovery_mode) {
 
@@ -662,7 +662,7 @@ static inline int send_offline_uevent(struct fsg_dev *fsg, int unplug_unsafe) {
 }
 
 static inline int send_online_uevent(struct fsg_dev *fsg) {
-	DBG(fsg, "\n%s:%d 0x%lx", __FUNCTION__,__LINE__,fsg->atomic_bitflags);
+	printk(KERN_INFO"\n%s:%d fsg_ 0x%lx recovery_mode:%d", __FUNCTION__,__LINE__,fsg->atomic_bitflags, mod_data.recovery_mode);
 
 	if (!mod_data.recovery_mode) {
 		if (!test_and_set_bit(ONLINE, &fsg->atomic_bitflags) &&
@@ -752,7 +752,7 @@ static void fsg_disconnect(struct usb_gadget *gadget)
 {
 	struct fsg_dev		*fsg = get_gadget_data(gadget);
 
-	DBG(fsg, "disconnect or port reset\n");
+	printk(KERN_INFO"%s:%d\n",__FUNCTION__,__LINE__);
 	raise_exception(fsg, FSG_STATE_DISCONNECT);
 }
 
@@ -3372,7 +3372,7 @@ static void /* __init_or_exit */ fsg_unbind(struct usb_gadget *gadget)
 	struct fsg_lun		*curlun;
 	struct usb_request	*req = fsg->ep0req;
 
-	DBG(fsg, "unbind\n");
+	printk(KERN_INFO"%s:%d unbind\n",__FUNCTION__,__LINE__);
 	clear_bit(REGISTERED, &fsg->atomic_bitflags);
 
 #if defined(CONFIG_LAB126)
@@ -3575,6 +3575,8 @@ static int __ref fsg_bind(struct usb_gadget *gadget)
 	struct usb_ep		*ep;
 	struct usb_request	*req;
 	char			*pathbuf, *p;
+
+	printk(KERN_INFO"%s:%d unbind\n",__FUNCTION__,__LINE__);
 
 	fsg->gadget = gadget;
 	set_gadget_data(gadget, fsg);
@@ -3822,7 +3824,7 @@ static void fsg_suspend(struct usb_gadget *gadget)
 {
 	struct fsg_dev		*fsg = get_gadget_data(gadget);
 
-	DBG(fsg, "suspend\n");
+	printk(KERN_INFO"%s:%d\n",__FUNCTION__,__LINE__);
 	set_bit(SUSPENDED, &fsg->atomic_bitflags);
 
 #if defined(CONFIG_LAB126)
@@ -3873,7 +3875,7 @@ static void fsg_resume(struct usb_gadget *gadget)
 {
 	struct fsg_dev		*fsg = get_gadget_data(gadget);
 
-	DBG(fsg, "resume\n");
+	printk(KERN_INFO"%s:%d\n",__FUNCTION__,__LINE__);
 	clear_bit(SUSPENDED, &fsg->atomic_bitflags);
 
 #if defined(CONFIG_LAB126)

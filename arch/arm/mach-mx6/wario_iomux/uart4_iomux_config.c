@@ -32,7 +32,11 @@ void uart4_iomux_config(void)
     //     ALT4 (4) - Select mux mode: ALT4 mux port: RXD_MUX of instance: uart4.
     //                NOTE: - Config Register IOMUXC_UART4_IPP_UART_RXD_MUX_SELECT_INPUT for mode ALT4.
     //     ALT5 (5) - Select mux mode: ALT5 mux port: GPIO[12] of instance: gpio5.
-    __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT4 & 0x7), IOMUXC_SW_MUX_CTL_PAD_SD1_DAT4);
+    if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+         lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+       __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT5 & 0x7), IOMUXC_SW_MUX_CTL_PAD_SD1_DAT4);
+    } else {
+       __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT4 & 0x7), IOMUXC_SW_MUX_CTL_PAD_SD1_DAT4);
     // Pad SD1_DAT4 is involved in Daisy Chain.
     // Input Select Register:
     // IOMUXC_UART4_IPP_UART_RXD_MUX_SELECT_INPUT(0x020E0814)
@@ -47,7 +51,8 @@ void uart4_iomux_config(void)
     //     SEL_SD1_DAT5_ALT4 (5) - Selecting Pad: SD1_DAT5 for Mode: ALT4.
     //     SEL_UART1_RXD_ALT2 (6) - Selecting Pad: UART1_RXD for Mode: ALT2.
     //     SEL_UART1_TXD_ALT2 (7) - Selecting Pad: UART1_TXD for Mode: ALT2.
-    __raw_writel((SEL_SD1_DAT4_ALT4 & 0x7), IOMUXC_UART4_IPP_UART_RXD_MUX_SELECT_INPUT);
+       __raw_writel((SEL_SD1_DAT4_ALT4 & 0x7), IOMUXC_UART4_IPP_UART_RXD_MUX_SELECT_INPUT);
+    }
     // Pad Control Register:
     // IOMUXC_SW_PAD_CTL_PAD_SD1_DAT4(0x020E054C)
     //   LVE (22) - Low Voltage Enable Field Reset: LVE_DISABLED
@@ -98,9 +103,9 @@ void uart4_iomux_config(void)
     //     SRE_FAST (1) - Fast Slew Rate
     if(lab126_board_rev_greater(BOARD_ID_BOURBON_WFO_EVT1) || lab126_board_is(BOARD_ID_WARIO_4_256M_CFG_C) ||
 	lab126_board_is(BOARD_ID_BOURBON_WFO_PREEVT2) ) {
-        __raw_writel((LVE_DISABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PU & 0x3) << 14 |
+        __raw_writel((LVE_DISABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
            (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
-           (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_SD1_DAT4);
+           (SPD_50MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_SD1_DAT4);
      } else {
         __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PU & 0x3) << 14 |
            (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
@@ -125,7 +130,12 @@ void uart4_iomux_config(void)
     //     ALT4 (4) - Select mux mode: ALT4 mux port: TXD_MUX of instance: uart4.
     //                NOTE: - Config Register IOMUXC_UART4_IPP_UART_RXD_MUX_SELECT_INPUT for mode ALT4.
     //     ALT5 (5) - Select mux mode: ALT5 mux port: GPIO[9] of instance: gpio5.
-    __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT4 & 0x7), IOMUXC_SW_MUX_CTL_PAD_SD1_DAT5);
+    if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+        lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+        __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT5 & 0x7), IOMUXC_SW_MUX_CTL_PAD_SD1_DAT5);
+    } else {
+        __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT4 & 0x7), IOMUXC_SW_MUX_CTL_PAD_SD1_DAT5);
+    }
     // Pad SD1_DAT5 is involved in Daisy Chain.
     // Input Select Register:
     // IOMUXC_UART4_IPP_UART_RXD_MUX_SELECT_INPUT(0x020E0814)
@@ -191,9 +201,9 @@ void uart4_iomux_config(void)
     //     SRE_FAST (1) - Fast Slew Rate
     if(lab126_board_rev_greater(BOARD_ID_BOURBON_WFO_EVT1) || lab126_board_is(BOARD_ID_WARIO_4_256M_CFG_C) ||
  	lab126_board_is(BOARD_ID_BOURBON_WFO_PREEVT2) ) {
-        __raw_writel((LVE_DISABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PU & 0x3) << 14 |
+        __raw_writel((LVE_DISABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
            (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
-           (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_SD1_DAT5);
+           (SPD_50MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_SD1_DAT5);
     } else {
         __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
            (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |

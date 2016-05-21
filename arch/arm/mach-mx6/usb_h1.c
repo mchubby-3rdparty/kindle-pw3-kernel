@@ -170,6 +170,8 @@ static int fsl_usb_host_init_ext(struct platform_device *pdev)
 	ret = fsl_usb_host_init(pdev);
 	if (ret) {
 		printk(KERN_ERR "host1 init fails......\n");
+                clk_disable(usb_oh3_clk);
+                clk_put(usb_oh3_clk);
 		return ret;
 	}
 	usbh1_internal_phy_clock_gate(true);
@@ -211,6 +213,7 @@ static void _wake_up_enable(struct fsl_usb2_platform_data *pdata, bool enable)
 	void __iomem *phy_reg = MX6_IO_ADDRESS(USB_PHY1_BASE_ADDR);
 
 	pr_debug("host1, %s, enable is %d\n", __func__, enable);
+
 	if (enable) {
 		__raw_writel(BM_USBPHY_CTRL_ENIDCHG_WKUP | BM_USBPHY_CTRL_ENVBUSCHG_WKUP
 				| BM_USBPHY_CTRL_ENDPDMCHG_WKUP
@@ -278,7 +281,7 @@ static void usbh1_platform_rh_resume_swfix(struct fsl_usb2_platform_data *pdata)
 {
 	u32 index = 0;
 
-	if ((UOG_PORTSC1 & (PORTSC_PORT_SPEED_MASK)) != PORTSC_PORT_SPEED_HIGH)
+	if ((UH1_PORTSC1 & (PORTSC_PORT_SPEED_MASK)) != PORTSC_PORT_SPEED_HIGH)
 		return ;
 	while ((UH1_PORTSC1 & PORTSC_PORT_FORCE_RESUME)
 			&& (index < 1000)) {
@@ -311,7 +314,7 @@ static void usbh1_platform_rh_resume(struct fsl_usb2_platform_data *pdata)
 	/*for mx6sl ,we do not need any sw fix*/
 	if (cpu_is_mx6sl())
 		return ;
-	if ((UOG_PORTSC1 & (PORTSC_PORT_SPEED_MASK)) != PORTSC_PORT_SPEED_HIGH)
+	if ((UH1_PORTSC1 & (PORTSC_PORT_SPEED_MASK)) != PORTSC_PORT_SPEED_HIGH)
 		return ;
 	while ((UH1_PORTSC1 & PORTSC_PORT_FORCE_RESUME)
 			&& (index < 1000)) {
@@ -350,11 +353,14 @@ static void _phy_lowpower_suspend(struct fsl_usb2_platform_data *pdata, bool ena
 
 		usbh1_internal_phy_clock_gate(false);
 	} else {
-		if (UH1_PORTSC1 & PORTSC_PHCD) {
+		if (UH1_PORTSC1 & PORTSC_PHCD)
 			UH1_PORTSC1 &= ~PORTSC_PHCD;
-			mdelay(1);
-		}
+
+                /* Wait PHY clok stable */
+                mdelay(1);
+
 		usbh1_internal_phy_clock_gate(true);
+                udelay(2);
 		tmp = (BM_USBPHY_PWD_TXPWDFS
 			| BM_USBPHY_PWD_TXPWDIBIAS
 			| BM_USBPHY_PWD_TXPWDV2I

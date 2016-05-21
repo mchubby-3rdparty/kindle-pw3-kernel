@@ -85,8 +85,8 @@ struct max77696_gauge {
 	struct work_struct                 init_work;
 	struct power_supply                psy;
 	struct delayed_work                psy_work;
-	struct delayed_work                lobat_work;	
-	struct delayed_work                batt_check_work;	
+	struct delayed_work                lobat_work;
+	struct delayed_work                batt_check_work;
 	unsigned long                      lobat_interval;
 	unsigned int                       irq;
 	u16                                irq_unmask;
@@ -129,32 +129,43 @@ int wario_battery_nac_mAH_av = 0;
 int wario_battery_nac_mAH_mix = 0;
 int wario_battery_lmd_mAH = 0;
 int wario_battery_cycle_cnt = 0;
-int wario_battery_valid = 0;
+int wario_battery_valid = 1;
 int max77696_gauge_cycles_ccmode = 0x60;	/* based on CC mode value from MGI data */
 int wario_lobat_event = 0;
 int wario_critbat_event = 0;
 int wario_lobat_condition = 0;
 int wario_critbat_condition = 0;
 int wario_crittemp_event = 0;
+#if defined(CONFIG_MX6SL_WARIO_WOODY)
+int wario_hitemp_event = 0;
+#endif
 int wario_battery_error_flags = 0;
 EXPORT_SYMBOL(wario_battery_voltage);
+EXPORT_SYMBOL(wario_battery_current);
 EXPORT_SYMBOL(wario_battery_temp_c);
 EXPORT_SYMBOL(wario_battery_temp_f);
+EXPORT_SYMBOL(wario_battery_capacity);
 EXPORT_SYMBOL(wario_lobat_event);
 EXPORT_SYMBOL(wario_lobat_condition);
 EXPORT_SYMBOL(wario_critbat_event);
 EXPORT_SYMBOL(wario_critbat_condition);
 EXPORT_SYMBOL(wario_battery_error_flags);
 EXPORT_SYMBOL(wario_battery_valid);
-static int wario_temp_err_cnt = 0; 
+static int wario_temp_err_cnt = 0;
 static int wario_battery_check_disabled = 0;
 
 u16 fg_saved_fullcap = 0;
+#if defined(CONFIG_POWER_SODA)
+extern struct max77696_socbatt_eventdata socbatt_eventdata;
+#endif
 extern unsigned long total_suspend_time;
 extern unsigned long last_suspend_time;
 extern signed int display_temp_c;
 extern int max77696_charger_set_mode (int mode);
-extern int max77696_led_ctrl(unsigned int led_id, bool enable);
+extern int max77696_led_ctrl(unsigned int led_id, int led_state);
+#ifdef CONFIG_FALCON
+extern int in_falcon(void);
+#endif
 
 #define WARIO_TEMP_C_LO_THRESH              0
 #define WARIO_TEMP_C_MID_THRESH             15
@@ -169,17 +180,27 @@ extern int max77696_led_ctrl(unsigned int led_id, bool enable);
 
 #define LOW_BATT_VOLT_LEVEL                 0
 #define CRIT_BATT_VOLT_LEVEL                1
-#define SYS_LOW_VOLT_THRESH                 3400    /* 3.4V */ 
-#define SYS_CRIT_VOLT_THRESH                3200    /* 3.2V */      
-#define SYS_SUSPEND_LOW_VOLT_THRESH         3450 	/* 3.45V */
-#define LOBAT_WORK_INTERVAL    	            (30*1000)
+#define SYS_LOW_VOLT_THRESH                 3400    /* 3400 mV */
+#define SYS_CRIT_VOLT_THRESH                3200    /* 3200 mV */
+#define SYS_LOW_VOLT_THRESH_HYS             10      /* 10mV */
+#define SYS_SUSPEND_LOW_VOLT_THRESH         3450    /* 3450 mV */
+#define LOBAT_WORK_INTERVAL                 100
+#define LOBAT_HYS_WORK_INTERVAL             15000
+#define LOBAT_CHECK_INTERVAL                2000
+#define LOBAT_CHECK_DELAY                   200
+
 #define BATT_RESUME_INTERVAL                10
 #define BATT_ID_CHECK_TEMP_DELTA            15
 #define BATT_ID_CHECK_INIT_INTERVAL         2000
 
-#define BATTLEARN_REG_BYTES                 10
+#define BATTLEARN_REG_BYTES                 MAX77696_GAUGE_LEARNED_NR_INFOS
 uint16_t system_battlearn[BATTLEARN_REG_BYTES];
 
+#if defined(CONFIG_MX6SL_WARIO_WOODY)
+static void wario_battery_hitemp_event(struct max77696_gauge *me);
+#endif
+void max77696_gauge_soclo_event(void);
+void max77696_gauge_sochi_event(void);
 static int max77696_gauge_check_cdata(struct max77696_gauge *me);
 static struct max77696_gauge* g_max77696_fg;
 static struct max77696_gauge_config_data* g_max77696_fg_cdata = NULL;
@@ -193,7 +214,7 @@ static void max77696_gauge_learned_read_all (struct max77696_gauge *me, u16 *lea
 /* Wario Tequila - battery = 898mAh (cap = /0.5mAh = 0x0704)*/
 static struct max77696_gauge_config_data gauge_cdata_wario = {
 	.tgain =            0xE8C5,		/* -5947 */
-	.toff =             0x245A,		/* 9306 */ 
+	.toff =             0x245A,		/* 9306 */
 	.config =           0x2210,
 	.filter_cfg =       0xA7A7,		/* temp(12min) & current(90sec) filters increased to minimize changes from transient differs from INI file */
 	.relax_cfg =        0x003B,
@@ -213,7 +234,7 @@ static struct max77696_gauge_config_data gauge_cdata_wario = {
 	.fullcap =          0x0704,
 	.design_cap =       0x0704,
 	.fullcapnom =       0x0704,
-	.batt_cap =         0x0704,	
+	.batt_cap =         0x0704,
 	.cell_char_tbl = {
 		/* Data from Line31 - Line78 of battery characterization data file */
 		/* 0x80 */
@@ -228,14 +249,14 @@ static struct max77696_gauge_config_data gauge_cdata_wario = {
 	},
 };
 
-/* Icewine - (EVT1.2) battery = 1320mAh (1293mAh INI) (cap = /0.5mAh = 0x0A1A) */	
+/* Icewine - (EVT1.2) battery = 1320mAh (1293mAh INI) (cap = /0.5mAh = 0x0A1A) */
 static struct max77696_gauge_config_data gauge_cdata_icewine_435V = {
-	.tgain =            0xE8C5,		/* -5947 */	
-	.toff =             0x245A,		/* 9306 */ 	
-	.config =           0x2210,	
+	.tgain =            0xE8C5,		/* -5947 */
+	.toff =             0x245A,		/* 9306 */
+	.config =           0x2210,
 	.filter_cfg =       0xA7A7,		/* temp(12min) & current(90sec) filters increased to minimize changes from transient differs from INI file */
 	.relax_cfg =        0x003B,
-	.learn_cfg =        0x2606,	
+	.learn_cfg =        0x2606,
 	.full_soc_thresh = 	0x5A00,
 	.rcomp0 =           0x0059,
 	.tcompc0 =          0x2032,
@@ -251,7 +272,7 @@ static struct max77696_gauge_config_data gauge_cdata_icewine_435V = {
 	.fullcap =          0x0A1A,
 	.design_cap =       0x0A1A,
 	.fullcapnom =       0x0A1A,
-	.batt_cap =         0x0A1A,	
+	.batt_cap =         0x0A1A,
 	.cell_char_tbl = {
 		/* Data from Line31 - Line78 of battery characterization data file */
 		/* 0x80 */
@@ -268,8 +289,8 @@ static struct max77696_gauge_config_data gauge_cdata_icewine_435V = {
 
 /* Icewine - (proto5 interim) battery = 1518mAh  (cap = /0.5mAh = 0x0BDC) */
 static struct max77696_gauge_config_data gauge_cdata_icewine_proto_435V = {
-	.tgain =            0xE8C5,		/* -5947 */	
-	.toff =             0x245A,		/* 9306 */ 
+	.tgain =            0xE8C5,		/* -5947 */
+	.toff =             0x245A,		/* 9306 */
 	.config =           0x2210,
 	.filter_cfg =       0xA7A7,		/* temp(12min) & current(90sec) filters increased to minimize changes from transient differs from INI file */
 	.relax_cfg =        0x003B,
@@ -289,7 +310,7 @@ static struct max77696_gauge_config_data gauge_cdata_icewine_proto_435V = {
 	.fullcap =          0x0BDC,
 	.design_cap =       0x0BDC,
 	.fullcapnom =       0x0BDC,
-	.batt_cap =         0x0BDC,	
+	.batt_cap =         0x0BDC,
 	.cell_char_tbl = {
 		/* Data from Line31 - Line78 of battery characterization data file */
 		/* 0x80 */
@@ -307,7 +328,7 @@ static struct max77696_gauge_config_data gauge_cdata_icewine_proto_435V = {
 /* Icewine - (EVT 1 pre-proto5) battery = 850mAh  (cap = /0.5mAh = 0x06A4) */
 static struct max77696_gauge_config_data gauge_cdata_icewine_42V = {
 	.tgain =            0xE8C5,		/* -5947 */
-	.toff =             0x245A,		/* 9306 */ 
+	.toff =             0x245A,		/* 9306 */
 	.config =           0x2210,
 	.filter_cfg =       0xA7A7,		/* temp(12min) & current(90sec) filters increased to minimize changes from transient differs from INI file */
 	.relax_cfg =        0x003B,
@@ -327,7 +348,7 @@ static struct max77696_gauge_config_data gauge_cdata_icewine_42V = {
 	.fullcap =          0x06A4,
 	.design_cap =       0x06A4,
 	.fullcapnom =       0x06A4,
-	.batt_cap =         0x06A4,	
+	.batt_cap =         0x06A4,
 	.cell_char_tbl = {
 		/* Data from Line31 - Line78 of battery characterization data file */
 		/* 0x80 */
@@ -345,7 +366,7 @@ static struct max77696_gauge_config_data gauge_cdata_icewine_42V = {
 /* pinot - battery = 1400mAh (1408mAh INI) (cap = /0.5mAh = 0x0B00) */
 static struct max77696_gauge_config_data gauge_cdata_pinot = {
 	.tgain =            0xE8C5,		/* -5947*/
-	.toff =             0x245A,		/* 9306 */ 
+	.toff =             0x245A,		/* 9306 */
 	.config =           0x2210,
 	.filter_cfg =       0xA7A7,		/* temp(12min) & current(90sec) filters increased to minimize changes from transient differs from INI file */
 	.relax_cfg =        0x003B,
@@ -365,7 +386,7 @@ static struct max77696_gauge_config_data gauge_cdata_pinot = {
 	.fullcap =          0x0B00,
 	.design_cap =       0x0B00,
 	.fullcapnom =       0x0B00,
-	.batt_cap =         0x0B00,	
+	.batt_cap =         0x0B00,
 	.cell_char_tbl = {
 		/* Data from Line31 - Line78 of battery characterization data file */
 		/* 0x80 */
@@ -412,6 +433,44 @@ static struct max77696_gauge_config_data gauge_cdata_bourbon = {
 		/* 0x90 */
 		0x01F0,0x00C0,0x2B00,0x0CF0,0x0AF0,0x19F0,0x3100,0x2060,
 		0x24F0,0x0FF0,0x0FF0,0x0BF0,0x0C10,0x0930,0x0900,0x0900,
+		/* 0xA0 */
+		0x0080,0x0080,0x0080,0x0080,0x0080,0x0080,0x0080,0x0080,
+		0x0080,0x0080,0x0080,0x0080,0x0080,0x0080,0x0080,0x0080
+	},
+};
+
+/* Whisky - battery = 247.4mAh (cap = /0.5mAh = 0x01EF)*/
+static struct max77696_gauge_config_data gauge_cdata_whisky = {
+	.tgain =            0xE81F,		/* -6113 temp range -5 and 65C, error 2.6 degrees at 35C) */
+	.toff =             0x252A,		/* 9514 temp range -5 and 65C, error 2.6 degrees at 35C) */
+	.config =           0x2210,
+	.filter_cfg =       0xA7A7,		/* temp(12min) & current(90sec) filters increased to minimize changes from transient differs from INI file */
+	.relax_cfg =        0x003B,
+	.learn_cfg =        0x2603,
+	.full_soc_thresh = 	0x5F00,		
+	.rcomp0 =           0x0030,
+	.tcompc0 =          0x1815,
+	.ichgt_term =       0x004C,
+
+	.vempty =           0xAA64,
+	.qrtbl00 =          0x1282,
+	.qrtbl10 =          0x0789,
+	.qrtbl20 =          0x0285,
+	.qrtbl30 =          0x0207,
+
+	.cycles =           0x0060,
+	.fullcap =          0x01EF,
+	.design_cap =       0x01EF,
+	.fullcapnom =       0x01EF,
+	.batt_cap =         0x01EF,	
+	.cell_char_tbl = {
+		/* Data from Line31 - Line78 of battery characterization data file */
+		/* 0x80 */
+		0x7DA0,0xADD0,0xB750,0xB8C0,0xBB50,0xBC80,0xBD30,0xBE50,
+		0xBF10,0xC050,0xC240,0xC390,0xC680,0xCBD0,0xCE00,0xD140,
+		/* 0x90 */
+		0x0030,0x0200,0x1650,0x0E30,0x1510,0x2120,0x1D70,0x1960,
+		0x12F0,0x0E60,0x0A40,0x0BB0,0x0AC0,0x0890,0x08C0,0x08C0,
 		/* 0xA0 */
 		0x0080,0x0080,0x0080,0x0080,0x0080,0x0080,0x0080,0x0080,
 		0x0080,0x0080,0x0080,0x0080,0x0080,0x0080,0x0080,0x0080
@@ -514,7 +573,7 @@ static struct max77696_gauge_config_data gauge_cdata_bourbon = {
 	(((val) & 0x8000)? -((int)((0x7fff & ~(val)) + 1)) : ((int)(val)))
 
 #define max77696_gauge_reg_write_word_verify(me, reg, val) \
-	max77696_gauge_verify_reg_write_word(me, FG_REG(reg), val)	
+	max77696_gauge_verify_reg_write_word(me, FG_REG(reg), val)
 
 void max77696_gauge_read_learned_all ( u16 *learned);
 void max77696_gauge_write_learned_all ( u16* learned);
@@ -536,7 +595,7 @@ static int max77696_gauge_verify_reg_write_word(struct max77696_gauge *me,
 	} while (retries && rd_val != wr_val);
 
 	if (rc < 0)
-		dev_err(me->dev, "MG config: %s:error=[%d] \n",__func__,rc);	
+		dev_err(me->dev, "MG config: %s:error=[%d] \n",__func__,rc);
 
 	return rc;
 }
@@ -685,10 +744,10 @@ static SYSDEV_ATTR(battery_id_valid, S_IRUGO, max77696_battery_id_valid_show, NU
 
 static ssize_t max77696_battlearn_show (struct sys_device *dev,
 		struct sysdev_attribute *devattr, char *buf)
-{	
+{
 	max77696_gauge_read_learned_all(system_battlearn);
 	memcpy(buf, system_battlearn, sizeof(system_battlearn));
-	
+
 	return sizeof(system_battlearn);
 }
 
@@ -700,24 +759,24 @@ static ssize_t max77696_battlearn_store (struct sys_device *dev,
 	 * 	if(POR bit is set)
 	 * 	{
 	 * 		if  write len is ok
-	 * 			copy the buffer from emmc->powerd->battery driver->pmic registers 
+	 * 			copy the buffer from emmc->powerd->battery driver->pmic registers
 	 * 		else
-	 * 			new battery -- does nothing, assume the new battlearn is going to wipe out the old setting anyway. 
-	 * 			
-	 * }		
+	 * 			new battery -- does nothing, assume the new battlearn is going to wipe out the old setting anyway.
+	 *
+	 * }
 	 * */
 	struct max77696_gauge *me = g_max77696_fg;
-	
+
 	if(me->por_bit_set){
 		if(count == 20) {
 			memcpy(system_battlearn, buf, count);
 			max77696_gauge_write_learned_all(system_battlearn);
-		} 
+		}
 		else {
 			printk(KERN_INFO "KERNEL: I pmic:fg newbatt::replaced new battery\n");
 		}
 		me->por_bit_set = 0;
-	} 
+	}
 	return (ssize_t)count;
 }
 
@@ -829,7 +888,41 @@ battery_store_send_overheat_uevent(struct sys_device *dev, struct sysdev_attribu
 	return count;
 }
 static SYSDEV_ATTR(send_overheat_uevent, S_IWUSR, NULL, battery_store_send_overheat_uevent);
-#endif 
+
+static ssize_t
+battery_send_soclo_uevent(struct sys_device *dev, struct sysdev_attribute *attr, const char *buf, size_t count)
+{
+	int value;
+
+	if (sscanf(buf, "%d", &value) <= 0) {
+		return -EINVAL;
+	}
+	if (value > 0) {
+		max77696_gauge_soclo_event();
+	} else {
+		return -EINVAL;
+	}
+	return count;
+}
+static SYSDEV_ATTR(send_soclo_uevent, S_IWUSR, NULL, battery_send_soclo_uevent);
+
+static ssize_t
+battery_send_sochi_uevent(struct sys_device *dev, struct sysdev_attribute *attr, const char *buf, size_t count)
+{
+	int value;
+
+	if (sscanf(buf, "%d", &value) <= 0) {
+		return -EINVAL;
+	}
+	if (value > 0) {
+		max77696_gauge_sochi_event();
+	} else {
+		return -EINVAL;
+	}
+	return count;
+}
+static SYSDEV_ATTR(send_sochi_uevent, S_IWUSR, NULL, battery_send_sochi_uevent);
+#endif
 
 #define MAX77696_GAUGE_ATTR_LEARNED(_name, _id) \
 	static ssize_t max77696_##_name##_show (struct sys_device *dev,\
@@ -902,13 +995,13 @@ static int max77696_gauge_sysdev_register(void)
 			sysdev_create_file(&wario_battery_device, &attr_fg_cdata_check);
 			sysdev_create_file(&wario_battery_device, &attr_fg_lobat_condition);
 			sysdev_create_file(&wario_battery_device, &attr_fg_batt_learn);
-			sysdev_create_file(&wario_battery_device, &attr_fg_learn_fullcap); 
-			sysdev_create_file(&wario_battery_device, &attr_fg_learn_cycles); 
-			sysdev_create_file(&wario_battery_device, &attr_fg_learn_rcomp0); 
-			sysdev_create_file(&wario_battery_device, &attr_fg_learn_tempco); 
-			sysdev_create_file(&wario_battery_device, &attr_fg_learn_qresidual00); 
-			sysdev_create_file(&wario_battery_device, &attr_fg_learn_qresidual10); 
-			sysdev_create_file(&wario_battery_device, &attr_fg_learn_qresidual20); 
+			sysdev_create_file(&wario_battery_device, &attr_fg_learn_fullcap);
+			sysdev_create_file(&wario_battery_device, &attr_fg_learn_cycles);
+			sysdev_create_file(&wario_battery_device, &attr_fg_learn_rcomp0);
+			sysdev_create_file(&wario_battery_device, &attr_fg_learn_tempco);
+			sysdev_create_file(&wario_battery_device, &attr_fg_learn_qresidual00);
+			sysdev_create_file(&wario_battery_device, &attr_fg_learn_qresidual10);
+			sysdev_create_file(&wario_battery_device, &attr_fg_learn_qresidual20);
 			sysdev_create_file(&wario_battery_device, &attr_fg_learn_qresidual30);
 			sysdev_create_file(&wario_battery_device, &attr_fg_learn_dqacc);
 			sysdev_create_file(&wario_battery_device, &attr_fg_learn_dpacc);
@@ -916,6 +1009,8 @@ static int max77696_gauge_sysdev_register(void)
 #ifdef DEVELOPMENT_MODE
 			sysdev_create_file(&wario_battery_device, &attr_send_lobat_uevent);
 			sysdev_create_file(&wario_battery_device, &attr_send_overheat_uevent);
+			sysdev_create_file(&wario_battery_device, &attr_send_soclo_uevent);
+			sysdev_create_file(&wario_battery_device, &attr_send_sochi_uevent);
 #endif
 		} else {
 			sysdev_class_unregister(&wario_battery_sysclass);
@@ -943,13 +1038,13 @@ static void max77696_gauge_sysdev_unregister(void)
 	sysdev_remove_file(&wario_battery_device, &attr_fg_cdata_check);
 	sysdev_remove_file(&wario_battery_device, &attr_fg_lobat_condition);
 	sysdev_remove_file(&wario_battery_device, &attr_fg_batt_learn);
-	sysdev_remove_file(&wario_battery_device, &attr_fg_learn_fullcap); 
-	sysdev_remove_file(&wario_battery_device, &attr_fg_learn_cycles); 
-	sysdev_remove_file(&wario_battery_device, &attr_fg_learn_rcomp0); 
-	sysdev_remove_file(&wario_battery_device, &attr_fg_learn_tempco); 
-	sysdev_remove_file(&wario_battery_device, &attr_fg_learn_qresidual00); 
-	sysdev_remove_file(&wario_battery_device, &attr_fg_learn_qresidual10); 
-	sysdev_remove_file(&wario_battery_device, &attr_fg_learn_qresidual20); 
+	sysdev_remove_file(&wario_battery_device, &attr_fg_learn_fullcap);
+	sysdev_remove_file(&wario_battery_device, &attr_fg_learn_cycles);
+	sysdev_remove_file(&wario_battery_device, &attr_fg_learn_rcomp0);
+	sysdev_remove_file(&wario_battery_device, &attr_fg_learn_tempco);
+	sysdev_remove_file(&wario_battery_device, &attr_fg_learn_qresidual00);
+	sysdev_remove_file(&wario_battery_device, &attr_fg_learn_qresidual10);
+	sysdev_remove_file(&wario_battery_device, &attr_fg_learn_qresidual20);
 	sysdev_remove_file(&wario_battery_device, &attr_fg_learn_qresidual30);
 	sysdev_remove_file(&wario_battery_device, &attr_fg_learn_dqacc);
 	sysdev_remove_file(&wario_battery_device, &attr_fg_learn_dpacc);
@@ -957,7 +1052,9 @@ static void max77696_gauge_sysdev_unregister(void)
 #ifdef DEVELOPMENT_MODE
 	sysdev_remove_file(&wario_battery_device, &attr_send_lobat_uevent);
 	sysdev_remove_file(&wario_battery_device, &attr_send_overheat_uevent);
-#endif 
+	sysdev_remove_file(&wario_battery_device, &attr_send_soclo_uevent);
+	sysdev_remove_file(&wario_battery_device, &attr_send_sochi_uevent);
+#endif
     sysdev_unregister(&wario_battery_device);
     sysdev_class_unregister(&wario_battery_sysclass);
     return;
@@ -1053,9 +1150,9 @@ static void max77696_gauge_learned_write_all (struct max77696_gauge *me, u16* le
 {
 	u16 buf ;
 	int rc, id;
-	
-	/* Note: FULLCAP(0), DQACC(8), DPACC(9) removed from the learn parmeters 
-	 * based on the Current drift issue - SW workaround 
+
+	/* Note: FULLCAP(0), DQACC(8), DPACC(9) removed from the learn parmeters
+	 * based on the Current drift issue - SW workaround
 	 */
 	for (id = 1; id < (GAUGE_LEARNED_NR_REGS - 2); id++) {
 		buf = __cpu_to_le16(learned[id]);
@@ -1066,7 +1163,7 @@ static void max77696_gauge_learned_write_all (struct max77696_gauge *me, u16* le
 		if (unlikely(rc)) {
 			dev_err(me->dev, "failed to write learned-%d [%d]\n", id, rc);
 		}
-	}	
+	}
 }
 
 static void max77696_gauge_learned_read_all (struct max77696_gauge *me, u16 *learned)
@@ -1074,8 +1171,8 @@ static void max77696_gauge_learned_read_all (struct max77696_gauge *me, u16 *lea
 	u16 buf = 0;
 	int rc, id;
 
-	/* Note: FULLCAP(0), DQACC(8), DPACC(9) removed from the learn parmeters 
-	 * based on the Current drift issue - SW workaround 
+	/* Note: FULLCAP(0), DQACC(8), DPACC(9) removed from the learn parmeters
+	 * based on the Current drift issue - SW workaround
 	 */
 	for (id = 1; id < (GAUGE_LEARNED_NR_REGS - 2); id++) {
 		rc = max77696_bulk_read(me->i2c,
@@ -1101,7 +1198,7 @@ static bool max77696_gauge_update_socrep (struct max77696_gauge *me, bool force)
 	bool updated = 0;
 	u16 buf;
 	int rc, socrep = me->socrep;
-	
+
 	if (unlikely(!force && __is_timestamp_expired(me, socrep_timestamp))) {
 		goto out;
 	}
@@ -1129,7 +1226,7 @@ static bool max77696_gauge_update_socmix (struct max77696_gauge *me, bool force)
 	bool updated = 0;
 	u16 buf;
 	int rc, socmix = me->socmix;
-	
+
 	if (unlikely(!force && __is_timestamp_expired(me, socmix_timestamp))) {
 		goto out;
 	}
@@ -1156,7 +1253,7 @@ static bool max77696_gauge_update_socavg (struct max77696_gauge *me, bool force)
 	bool updated = 0;
 	u16 buf;
 	int rc, socav = me->socav;
-	
+
 	if (unlikely(!force && __is_timestamp_expired(me, socavg_timestamp))) {
 		goto out;
 	}
@@ -1201,7 +1298,7 @@ static bool max77696_gauge_update_temp (struct max77696_gauge *me, bool force)
 	/* Ignore LSB for 1 deg celsius resolution */
 	celsius = (celsius >> 8);
 	fahrenheit = ((celsius * 9) / 5) + 32;
-	me->temp = fahrenheit; 
+	me->temp = fahrenheit;
 	wario_battery_temp_f = me->temp;
 	wario_battery_temp_c = celsius;
 
@@ -1465,7 +1562,7 @@ out:
 	return updated;
 }
 
-static void wario_battery_overheat_event(struct max77696_gauge *me) 
+static void wario_battery_overheat_event(struct max77696_gauge *me)
 {
 	char *envp[] = { "BATTERY=overheat", NULL };
 	printk(KERN_CRIT "KERNEL: E pmic:fg battery temp::overheat event temp=%dC\n",
@@ -1476,7 +1573,7 @@ static void wario_battery_overheat_event(struct max77696_gauge *me)
 
 void max77696_gauge_overheat(void)
 {
-	struct max77696_gauge *me = g_max77696_fg;	
+	struct max77696_gauge *me = g_max77696_fg;
 	if (unlikely(me == NULL)) {
 		return;
 	}
@@ -1488,8 +1585,34 @@ void max77696_gauge_overheat(void)
 }
 EXPORT_SYMBOL(max77696_gauge_overheat);
 
+#if defined(CONFIG_MX6SL_WARIO_WOODY)
+static void wario_battery_hitemp_event(struct max77696_gauge *me)
+{
+	char *envp[] = { "BATTERY=temp_hi", NULL };
+	printk(KERN_CRIT "KERNEL: E pmic:fg battery temp::hi event temp=%dC\n",
+			wario_battery_temp_c);
+	kobject_uevent_env(me->kobj, KOBJ_CHANGE, envp);
+	return;
+}
+
+void max77696_gauge_temphi(void)
+{
+	struct max77696_gauge *me = g_max77696_fg;
+	if (unlikely(me == NULL)) {
+		return;
+	}
+	if (!wario_hitemp_event) {
+		wario_battery_hitemp_event(me);
+		wario_hitemp_event = 1;
+	}
+	return;
+}
+EXPORT_SYMBOL(max77696_gauge_temphi);
+#endif
+
+
 /*
- * Post a low battery or a critical battery event to the userspace 
+ * Post a low battery or a critical battery event to the userspace
  */
 void wario_battery_lobat_event(struct max77696_gauge *me, int crit_level)
 {
@@ -1513,6 +1636,7 @@ void wario_battery_lobat_event(struct max77696_gauge *me, int crit_level)
 static void max77696_gauge_lobat_work(struct work_struct *work)
 {
 	struct max77696_gauge *me = container_of(work, struct max77696_gauge, lobat_work.work);
+#if defined(CONFIG_MX6SL_WARIO_BASE)
 	int batt_voltage = 0;
 	bool charger_conn = max77696_charger_online_def_cb();
 
@@ -1521,23 +1645,88 @@ static void max77696_gauge_lobat_work(struct work_struct *work)
 
 	if (!charger_conn) {
 		if ( (batt_voltage <= SYS_CRIT_VOLT_THRESH) || wario_critbat_condition) {
-			wario_battery_lobat_event(me, CRIT_BATT_VOLT_LEVEL); 
+			wario_battery_lobat_event(me, CRIT_BATT_VOLT_LEVEL);
 		} else if (batt_voltage <= SYS_LOW_VOLT_THRESH) {
 			wario_battery_lobat_event(me, LOW_BATT_VOLT_LEVEL);
 		} else {
 			schedule_delayed_work(&(me->lobat_work), me->lobat_interval);
 		}
 	}
+#elif defined(CONFIG_MX6SL_WARIO_WOODY)
+	int i = 0;
+	
+	if (max77696_charger_online_def_cb()) {
+		return; /* charger plugged in */
+	}
+
+	for (i = 0; i < (LOBAT_CHECK_INTERVAL / LOBAT_CHECK_DELAY); i++) {
+		max77696_gauge_update_vcell(me, 1);
+		pr_debug("%s: voltage = %dmV \n", __func__, me->vcell);
+		if (me->vcell > (SYS_LOW_VOLT_THRESH + SYS_LOW_VOLT_THRESH_HYS)) {
+			break;
+		}
+		msleep(LOBAT_CHECK_DELAY);
+	}
+
+	if (!max77696_charger_online_def_cb()) {
+		if ( (me->vcell <= SYS_CRIT_VOLT_THRESH)) {
+			wario_battery_lobat_event(me, CRIT_BATT_VOLT_LEVEL);
+		} else if (me->vcell <= SYS_LOW_VOLT_THRESH) {
+			wario_battery_lobat_event(me, LOW_BATT_VOLT_LEVEL);
+		} else if (me->vcell <= (SYS_LOW_VOLT_THRESH + SYS_LOW_VOLT_THRESH_HYS)) {
+			pr_debug("%s: schedule lobat check voltage = %dmV \n", __func__, me->vcell);
+			schedule_delayed_work(&(me->lobat_work), msecs_to_jiffies(LOBAT_HYS_WORK_INTERVAL));
+		} else {
+			pr_debug("%s: skipping lobat check (recovered from voltage droop) voltage = %dmV \n", __func__, me->vcell);
+		}
+	}
+#endif
 	return;
 }
 
 void max77696_gauge_lobat(void)
 {
-	struct max77696_gauge *me = g_max77696_fg;	
+	struct max77696_gauge *me = g_max77696_fg;
 	schedule_delayed_work(&(me->lobat_work), me->lobat_interval);
 	return;
 }
 EXPORT_SYMBOL(max77696_gauge_lobat);
+
+void max77696_gauge_sochi_event(void)
+{
+	struct max77696_gauge *me = g_max77696_fg;
+	char *envp[] = { "BATTERY=soc_hi", NULL };
+	kobject_uevent_env(me->kobj, KOBJ_CHANGE, envp);
+	printk(KERN_CRIT "KERNEL: I pmic:fg battery salrtmax::soc_hi event\n");
+	printk(KERN_INFO "%s Wario battery temp:%dC, volt:%dmV, current:%dmA, capacity(soc_av):%d%%, capacity(soc_rep):%d%% mAH:%dmAh\n",
+		__func__, wario_battery_temp_c, wario_battery_voltage, wario_battery_current,
+		wario_battery_capacity, wario_battery_capacity_rep, wario_battery_nac_mAH);
+#if defined(CONFIG_POWER_SODA)
+	/* since we reached battery Hi, subscribe to min/Low event */
+	atomic_set(&socbatt_eventdata.override, SOCBATT_MINSUBSCRIBE_TRIGGER);
+	schedule_delayed_work(&socbatt_eventdata.socbatt_event_work,
+		msecs_to_jiffies(SOCBATT_EVTHDL_DELAY));
+#endif
+}
+EXPORT_SYMBOL(max77696_gauge_sochi_event);
+
+void max77696_gauge_soclo_event(void)
+{
+	struct max77696_gauge *me = g_max77696_fg;
+	char *envp[] = { "BATTERY=soc_lo", NULL };
+	kobject_uevent_env(me->kobj, KOBJ_CHANGE, envp);
+	printk(KERN_CRIT "KERNEL: I pmic:fg battery salrtmin::soc_lo event\n");
+	printk(KERN_INFO "%s Wario battery temp:%dC, volt:%dmV, current:%dmA, capacity(soc_av):%d%%, capacity(soc_rep):%d%% mAH:%dmAh\n",
+		__func__, wario_battery_temp_c, wario_battery_voltage, wario_battery_current,
+		wario_battery_capacity, wario_battery_capacity_rep, wario_battery_nac_mAH);
+#if defined(CONFIG_POWER_SODA)        
+	/* since we reached battery Low, subscribe to Hi/max event */
+	atomic_set(&socbatt_eventdata.override, SOCBATT_MAXSUBSCRIBE_TRIGGER);
+	schedule_delayed_work(&socbatt_eventdata.socbatt_event_work,
+		msecs_to_jiffies(SOCBATT_EVTHDL_DELAY));
+#endif
+}
+EXPORT_SYMBOL(max77696_gauge_soclo_event);
 
 /* Modify CAP_REP based on CAP_AV */
 int max77696_gauge_repcap_adj(struct max77696_gauge *me)
@@ -1563,7 +1752,7 @@ int max77696_gauge_repcap_adj(struct max77696_gauge *me)
 /* Modify gauge parameters (CAP_REP, FULL_CAP) to adjust for the drift - (j42-5579) */
 int max77696_gauge_driftadj_handler(void)
 {
-	struct max77696_gauge *me = g_max77696_fg;	
+	struct max77696_gauge *me = g_max77696_fg;
 	int rc = 0;
 	u16 av_cap = 0, full_cap = 0;
 
@@ -1599,7 +1788,7 @@ EXPORT_SYMBOL(max77696_gauge_driftadj_handler);
 
 /*
  *	wario_check_battery:
- * 		This function validates battery by comparing temperature 
+ * 		This function validates battery by comparing temperature
  *		readings between FG & DISPLAY thermistor
  */
 static int wario_check_battery(void)
@@ -1607,12 +1796,12 @@ static int wario_check_battery(void)
     int temp_delta = 0;
 	temp_delta = abs(wario_battery_temp_c - display_temp_c);
 
-	if ((temp_delta < BATT_ID_CHECK_TEMP_DELTA) || 
+	if ((temp_delta < BATT_ID_CHECK_TEMP_DELTA) ||
 		(strncmp(system_bootmode, "diags", 5) == 0) ||
-		(lab126_board_is(BOARD_ID_WARIO)) ||
+		(lab126_board_is(BOARD_ID_WARIO) || lab126_board_is(BOARD_ID_WOODY)) ||
 		wario_battery_check_disabled) {
-		return 1;	
-	} 
+		return 1;
+	}
 	return 0;
 }
 
@@ -1621,7 +1810,7 @@ static void wario_battery_check_handler(struct work_struct *work)
 	struct max77696_gauge *me = container_of(work, struct max77696_gauge, lobat_work.work);
 	int rc = 0;
 	wario_battery_valid = wario_check_battery();
-	
+
 	printk(KERN_INFO "KERNEL: I pmic:fg battery id check::wario_battery_valid=%d\n",wario_battery_valid);
 
 	if (!wario_battery_valid) {
@@ -1634,15 +1823,23 @@ static void wario_battery_check_handler(struct work_struct *work)
             dev_err(me->dev, "%s: Unable to turn-off chga [%d]\n", __func__, rc);
             goto out;
         }
-		
+
 		/* Turn OFF AMBER LED (charging indicator) - manual mode */
         rc = max77696_led_ctrl(MAX77696_LED_AMBER, MAX77696_LED_OFF);
         if (unlikely(rc)) {
             dev_err(me->dev, "%s: error led ctrl (amber) [%d]\n", __func__, rc);
         }
+
+#if defined(CONFIG_MX6SL_WARIO_WOODY)
+		/* Turn OFF GREEN LED - manual mode */
+		rc = max77696_led_ctrl(MAX77696_LED_GREEN, MAX77696_LED_OFF);
+		if (unlikely(rc)) {
+		    dev_err(me->dev, "%s: error led ctrl (amber) [%d]\n", __func__, rc);
+		}
+#endif
 	}
 
-out:	
+out:
 	return;
 }
 
@@ -1691,7 +1888,7 @@ static void max77696_gauge_init_alert (struct max77696_gauge *me)
 	max77696_gauge_reg_write_word(me, TALRT_TH, __cpu_to_le16(alert_val));
 
 	if (likely(me->s_alert_max > me->s_alert_min)) {
-		alert_en |= FG_CONFIG_AEN;
+		alert_en |= (FG_CONFIG_AEN | FG_CONFIG_SS);
 
 		alert_max = min(me->s_alert_max, 255);
 		alert_min = max(me->s_alert_min,   0);
@@ -1715,7 +1912,7 @@ static void max77696_gauge_init_alert (struct max77696_gauge *me)
 	max77696_gauge_enable_irq(me, alert_en, 0);
 }
 
-static int max77696_gauge_load_custom_model(struct max77696_gauge *me, 
+static int max77696_gauge_load_custom_model(struct max77696_gauge *me,
 		struct max77696_gauge_config_data *cdata)
 {
 	int tbl_size = ARRAY_SIZE(cdata->cell_char_tbl);
@@ -1726,7 +1923,7 @@ static int max77696_gauge_load_custom_model(struct max77696_gauge *me,
 
 	tmp_data = kcalloc(tbl_size, sizeof(*tmp_data), GFP_KERNEL);
 	if (!tmp_data) {
-		dev_err(me->dev, "MG config: couldn't allocate memory \n");	
+		dev_err(me->dev, "MG config: couldn't allocate memory \n");
 		return -ENOMEM;
 	}
 
@@ -1766,11 +1963,11 @@ static int max77696_gauge_load_custom_model(struct max77696_gauge *me,
 	}
 
 out:
-	kfree(tmp_data);	
+	kfree(tmp_data);
 	return rc;
 }
 
-static int max77696_gauge_verify_custom_model(struct max77696_gauge *me, 
+static int max77696_gauge_verify_custom_model(struct max77696_gauge *me,
 		struct max77696_gauge_config_data *cdata)
 {
 	int tbl_size = ARRAY_SIZE(cdata->cell_char_tbl);
@@ -1781,7 +1978,7 @@ static int max77696_gauge_verify_custom_model(struct max77696_gauge *me,
 
 	tmp_data = kcalloc(tbl_size, sizeof(*tmp_data), GFP_KERNEL);
 	if (!tmp_data) {
-		dev_err(me->dev, "MG config: couldn't allocate memory \n");	
+		dev_err(me->dev, "MG config: couldn't allocate memory \n");
 		return -ENOMEM;
 	}
 
@@ -1795,10 +1992,9 @@ static int max77696_gauge_verify_custom_model(struct max77696_gauge *me,
 
 	/* Verify the Custom Model */
 	if (memcmp(cdata->cell_char_tbl, tmp_data, tbl_size)) {
-		dev_err(me->dev, "MG config: %s compare failed\n", __func__);
+		printk(KERN_ERR "MG config: %s compare failed\n", __func__);
 		for (i = 0; i < tbl_size; i++)
-			dev_info(me->dev, "0x%x, 0x%x", cdata->cell_char_tbl[i],tmp_data[i]);
-		dev_info(me->dev, "\n");
+			printk(KERN_INFO "0x%x, 0x%x", cdata->cell_char_tbl[i],tmp_data[i]);
 		printk(KERN_ERR "KERNEL: E pmic:fg mg check::custom model verify failed\n");
 		rc = -EIO;
 	}
@@ -1818,14 +2014,14 @@ static int max77696_gauge_verify_custom_model(struct max77696_gauge *me,
 		}
 	}
 
-	kfree(tmp_data);	
+	kfree(tmp_data);
 	return rc;
 }
 
 static int max77696_gauge_check_cdata(struct max77696_gauge *me)
 {
 	struct max77696_gauge_config_data *cdata = g_max77696_fg_cdata;
-	u16 val = 0;	
+	u16 val = 0;
 	int rc = 0;
 
 	if (cdata == NULL) {
@@ -1836,95 +2032,108 @@ static int max77696_gauge_check_cdata(struct max77696_gauge *me)
 
 	max77696_gauge_reg_read_word(me, FILTERCFG, &val);
 	if (val != cdata->filter_cfg) {
-		printk(KERN_ERR "KERNEL: E pmic:fg mg check::FILTERCFG invalid\n");
+		printk(KERN_ERR "KERNEL: E pmic:fg mg check::FILTERCFG invalid "
+			"read val: %x cdata: %x\n", val, cdata->filter_cfg);
 		rc = -EINVAL;
 		goto out;
 	}
 
 	max77696_gauge_reg_read_word(me, RELAXCFG, &val);
 	if (val != cdata->relax_cfg) {
-		printk(KERN_ERR "KERNEL: E pmic:fg mg check::RELAXCFG invalid\n");
+		printk(KERN_ERR "KERNEL: E pmic:fg mg check::RELAXCFG invalid "
+			"read val: %x cdata: %x\n", val, cdata->relax_cfg);
 		rc = -EINVAL;
 		goto out;
 	}
 
 	max77696_gauge_reg_read_word(me, FULLSOCTHR, &val);
 	if (val != cdata->full_soc_thresh) {
-		printk(KERN_ERR "KERNEL: E pmic:fg mg check::FULLSOCTHR invalid\n");
+		printk(KERN_ERR "KERNEL: E pmic:fg mg check::FULLSOCTHR invalid "
+			"read val: %x cdata: %x\n", val, cdata->full_soc_thresh);
 		rc = -EINVAL;
 		goto out;
 	}
 
 	max77696_gauge_reg_read_word(me, TEMPCO, &val);
 	if (val != cdata->tcompc0) {
-		printk(KERN_ERR "KERNEL: E pmic:fg mg check::TEMPCO invalid\n");
+		printk(KERN_ERR "KERNEL: E pmic:fg mg check::TEMPCO invalid "
+			"read val: %x cdata: %x\n", val, cdata->tcompc0);
 		rc = -EINVAL;
 		goto out;
 	}
 
 	max77696_gauge_reg_read_word(me, ICHGTERM, &val);
 	if (val != cdata->ichgt_term) {
-		printk(KERN_ERR "KERNEL: E pmic:fg mg check::ICHGTERM invalid\n");
+		printk(KERN_ERR "KERNEL: E pmic:fg mg check::ICHGTERM invalid "
+			"read val: %x cdata: %x\n", val, cdata->ichgt_term);
 		rc = -EINVAL;
 		goto out;
 	}
 
 	max77696_gauge_reg_read_word(me, TGAIN, &val);
 	if (val != cdata->tgain) {
-		printk(KERN_ERR "KERNEL: E pmic:fg mg check::TGAIN invalid\n");
+		printk(KERN_ERR "KERNEL: E pmic:fg mg check::TGAIN invalid "
+			"read val: %x cdata: %x\n", val, cdata->tgain);
 		rc = -EINVAL;
 		goto out;
 	}
 
 	max77696_gauge_reg_read_word(me, TOFF, &val);
 	if (val != cdata->toff) {
-		printk(KERN_ERR "KERNEL: E pmic:fg mg check::TOFF invalid\n");
+		printk(KERN_ERR "KERNEL: E pmic:fg mg check::TOFF invalid "
+			"read val: %x cdata: %x\n", val, cdata->toff);
 		rc = -EINVAL;
 		goto out;
 	}
 
 	max77696_gauge_reg_read_word(me, V_EMPTY, &val);
 	if (val != cdata->vempty) {
-		printk(KERN_ERR "KERNEL: E pmic:fg mg check::V_EMPTY invalid\n");
+		printk(KERN_ERR "KERNEL: E pmic:fg mg check::V_EMPTY invalid "
+			"read val: %x cdata: %x\n", val, cdata->vempty);
 		rc = -EINVAL;
 		goto out;
 	}
 
 	max77696_gauge_reg_read_word(me, QRESIDUAL00, &val);
 	if (val != cdata->qrtbl00) {
-		printk(KERN_ERR "KERNEL: E pmic:fg mg check::QRESIDUAL00 invalid\n");
+		printk(KERN_ERR "KERNEL: E pmic:fg mg check::QRESIDUAL00 invalid "
+			"read val: %x cdata: %x\n", val, cdata->qrtbl00);
 		rc = -EINVAL;
 		goto out;
 	}
 
 	max77696_gauge_reg_read_word(me, QRESIDUAL10, &val);
 	if (val != cdata->qrtbl10) {
-		printk(KERN_ERR "KERNEL: E pmic:fg mg check::QRESIDUAL10 invalid\n");
+		printk(KERN_ERR "KERNEL: E pmic:fg mg check::QRESIDUAL10 invalid "
+			"read val: %x cdata: %x\n", val, cdata->qrtbl10);
 		rc = -EINVAL;
 		goto out;
 	}
 
 	max77696_gauge_reg_read_word(me, QRESIDUAL20, &val);
 	if (val != cdata->qrtbl20) {
-		printk(KERN_ERR "KERNEL: E pmic:fg mg check::QRESIDUAL20 invalid\n");
+		printk(KERN_ERR "KERNEL: E pmic:fg mg check::QRESIDUAL20 invalid "
+			"read val: %x cdata: %x\n", val, cdata->qrtbl20);
 		rc = -EINVAL;
 		goto out;
 	}
 
 	max77696_gauge_reg_read_word(me, QRESIDUAL30, &val);
 	if (val != cdata->qrtbl30) {
-		printk(KERN_ERR "KERNEL: E pmic:fg mg check::QRESIDUAL30 invalid\n");
+		printk(KERN_ERR "KERNEL: E pmic:fg mg check::QRESIDUAL30 invalid "
+			"read val: %x cdata: %x\n", val, cdata->qrtbl30);
 		rc = -EINVAL;
 		goto out;
 	}
 
 	max77696_gauge_reg_read_word(me, DESIGNCAP, &val);
 	if (val != cdata->design_cap) {
-		printk(KERN_ERR "KERNEL: E pmic:fg mg check::DESIGNCAP invalid\n");
+		printk(KERN_ERR "KERNEL: E pmic:fg mg check::DESIGNCAP invalid "
+			"read val: %x cdata: %x\n", val, cdata->design_cap);
 		rc = -EINVAL;
 		goto out;
 	}
-	
+
 	/* Verify Custom Model */
 	rc = max77696_gauge_verify_custom_model(me, cdata);
 	if (rc) {
@@ -1940,8 +2149,8 @@ out:
 static int max77696_gauge_init_config(struct max77696_gauge *me)
 {
 	struct max77696_gauge_config_data *cdata = g_max77696_fg_cdata;
-	u16 vfsoc, rep_cap, dq_acc, sts;
-	u32 rem_cap;
+	u16 vfsoc = 0, rep_cap = 0, dq_acc = 0, sts = 0, full_cap = 0, rep_cap_chk = 0;
+	u32 rem_cap = 0;
 	int rc = 0;
 
 	if (cdata == NULL) {
@@ -1953,7 +2162,7 @@ static int max77696_gauge_init_config(struct max77696_gauge *me)
 	/* Initialize Configuration */
 	max77696_gauge_reg_write_word(me, CONFIG, cdata->config);
 	max77696_gauge_reg_write_word(me, FILTERCFG, cdata->filter_cfg);
-	max77696_gauge_reg_write_word(me, RELAXCFG, cdata->relax_cfg); 	
+	max77696_gauge_reg_write_word(me, RELAXCFG, cdata->relax_cfg);
 	max77696_gauge_reg_write_word(me, LEARNCFG, cdata->learn_cfg);
 	max77696_gauge_reg_write_word(me, FULLSOCTHR, cdata->full_soc_thresh);
 
@@ -1974,9 +2183,9 @@ static int max77696_gauge_init_config(struct max77696_gauge *me)
 	}
 
 	max77696_gauge_reg_write_word_verify(me, TEMPCO, cdata->tcompc0);
-	max77696_gauge_reg_write_word(me, ICHGTERM, cdata->ichgt_term); 
+	max77696_gauge_reg_write_word(me, ICHGTERM, cdata->ichgt_term);
 	max77696_gauge_reg_write_word(me, TGAIN, cdata->tgain);
-	max77696_gauge_reg_write_word(me, TOFF, cdata->toff);	
+	max77696_gauge_reg_write_word(me, TOFF, cdata->toff);
 	max77696_gauge_reg_write_word_verify(me, V_EMPTY, cdata->vempty);
 	max77696_gauge_reg_write_word_verify(me, QRESIDUAL00, cdata->qrtbl00);
 	max77696_gauge_reg_write_word_verify(me, QRESIDUAL10, cdata->qrtbl10);
@@ -1998,7 +2207,7 @@ static int max77696_gauge_init_config(struct max77696_gauge *me)
 		goto out;
 	}
 
-	/* delay must be atleast 350mS to allow VFSOC 
+	/* delay must be atleast 350mS to allow VFSOC
 	 * to be calculated from the new configuration
 	 */
 	msleep(350);
@@ -2029,10 +2238,32 @@ static int max77696_gauge_init_config(struct max77696_gauge *me)
 
 	/* Load New Capacity Parameters */
 	rem_cap = ((vfsoc >> 8) * cdata->fullcap) / 100;
-	max77696_gauge_reg_write_word(me, REMCAPMIX, (u16)rem_cap);
+	rc = max77696_gauge_reg_write_word_verify(me, REMCAPMIX, (u16)rem_cap);
+	if (rc) {
+		printk(KERN_ERR "KERNEL: E pmic:fg init config::REMCAPMIX failed\n");
+		rc = -EIO;
+		goto out;
+	}
 
 	rep_cap = ((u16)rem_cap) * ((cdata->batt_cap/cdata->fullcap) / MODEL_SCALING);
-	max77696_gauge_reg_write_word(me, REMCAPREP, rep_cap);
+	rc = max77696_gauge_reg_write_word_verify(me, REMCAPREP, rep_cap);
+	if (rc) {
+		printk(KERN_ERR "KERNEL: E pmic:fg init config::REMCAPREP failed\n");
+		rc = -EIO;
+		goto out;
+	}
+
+	msleep(10);
+	max77696_gauge_reg_read_word(me, REMCAPREP, &rep_cap_chk);
+	if (rep_cap_chk != rep_cap) {
+		printk(KERN_ERR "KERNEL: E pmic:fg init config::REMCAPREP check failed\n");
+		rc = max77696_gauge_reg_write_word_verify(me, REMCAPREP, rep_cap);
+		if (rc) {
+			printk(KERN_ERR "KERNEL: E pmic:fg init config::REMCAPREP failed\n");
+			rc = -EIO;
+			goto out;
+		}
+	}
 
 	/* Write dQ_acc to 200% of Capacity and dP_acc to 200% */
 	dq_acc = (cdata->fullcap/4);
@@ -2054,6 +2285,19 @@ static int max77696_gauge_init_config(struct max77696_gauge *me)
 		rc = -EIO;
 		goto out;
 	}
+
+	msleep(10);
+	max77696_gauge_reg_read_word(me, FULLCAP, &full_cap);
+	if (full_cap != cdata->batt_cap) {
+		printk(KERN_ERR "KERNEL: E pmic:fg init config::FULLCAP check failed\n");
+		rc = max77696_gauge_reg_write_word_verify(me, FULLCAP, cdata->batt_cap);
+		if (rc) {
+			printk(KERN_ERR "KERNEL: E pmic:fg init config::FULLCAP(new) retry failed\n");
+			rc = -EIO;
+			goto out;
+		}
+	}
+
 	max77696_gauge_reg_write_word(me, DESIGNCAP, cdata->fullcap);
 	rc = max77696_gauge_reg_write_word_verify(me, FULLCAPNOM, cdata->fullcap);
 	if (rc) {
@@ -2084,9 +2328,9 @@ static void max77696_gauge_init_work (struct work_struct *work)
 {
 	struct max77696_gauge *me = container_of(work, struct max77696_gauge, init_work);
 	int rc;
-	
+
 	/* Initialize registers according to values from the platform data */
-	
+
 	if (me->enable_por_init) {
 		rc = max77696_gauge_init_config(me);
 		if (rc)	{
@@ -2095,14 +2339,14 @@ static void max77696_gauge_init_work (struct work_struct *work)
 			return;
 		}
 		printk(KERN_INFO "KERNEL: I pmic:fg battery init::mg config init successful\n");
-	}	
+	}
 
 	me->init_complete = true;
 	max77696_gauge_update_availcap_rep(me, 1);
 	max77696_gauge_update_nomfullcap(me, 1);
 	max77696_gauge_update_cycle_count(me, 1);
 
-	max77696_gauge_init_alert(me);	
+	max77696_gauge_init_alert(me);
 	if (likely(me->update_interval && me->polling_properties)) {
 		schedule_delayed_work(&(me->psy_work), me->update_interval);
 	}
@@ -2167,10 +2411,15 @@ static void max77696_gauge_psy_work (struct work_struct *work)
 		power_supply_changed(&(me->psy));
 	}
 
-	if ((wario_battery_temp_c < WARIO_TEMP_C_CRIT_THRESH) && wario_crittemp_event) 
+	if ((wario_battery_temp_c < WARIO_TEMP_C_CRIT_THRESH) && wario_crittemp_event)
 		wario_crittemp_event = 0;
 
-	if ((wario_battery_temp_c <= WARIO_TEMP_C_LO_THRESH) || 
+#if defined(CONFIG_MX6SL_WARIO_WOODY)
+	if ((wario_battery_temp_c < WARIO_TEMP_C_HI_THRESH) && wario_hitemp_event)
+		wario_hitemp_event = 0;
+#endif
+
+	if ((wario_battery_temp_c <= WARIO_TEMP_C_LO_THRESH) ||
 		(wario_battery_temp_c >= WARIO_TEMP_C_CRIT_THRESH)) {
 		wario_temp_err_cnt++;
 	} else {
@@ -2208,6 +2457,7 @@ static void max77696_gauge_external_power_changed (struct power_supply *psy)
 	__unlock(me);
 }
 
+#if defined(CONFIG_MX6SL_WARIO_BASE)
 static void max77696_gauge_trigger_leds (struct max77696_gauge *me, int status)
 {
 	struct max77696_platform_data *chip_pdata = me->chip->dev->platform_data;
@@ -2252,6 +2502,7 @@ static void max77696_gauge_trigger_leds (struct max77696_gauge *me, int status)
 
 	}
 }
+#endif
 
 static int max77696_gauge_get_prop_status (struct max77696_gauge *me)
 {
@@ -2278,7 +2529,9 @@ static int max77696_gauge_get_prop_status (struct max77696_gauge *me)
 			POWER_SUPPLY_STATUS_CHARGING : POWER_SUPPLY_STATUS_NOT_CHARGING);
 
 out:
+#if defined(CONFIG_MX6SL_WARIO_BASE)
 	max77696_gauge_trigger_leds(me, rc);
+#endif
 	return rc;
 }
 
@@ -2577,9 +2830,9 @@ static __devinit int max77696_gauge_probe (struct platform_device *pdev)
 
 	BUG_ON(chip->gauge_ptr);
 	chip->gauge_ptr = me;
-	
-	max77696_gauge_update_socrep(me, 1);	
-	max77696_gauge_update_socavg(me, 1);		
+
+	max77696_gauge_update_socrep(me, 1);
+	max77696_gauge_update_socavg(me, 1);
 	max77696_gauge_update_vcell(me, 1);
 	max77696_gauge_update_avgcurrent(me, 1);
 	max77696_gauge_update_temp(me, 1);
@@ -2594,20 +2847,21 @@ static __devinit int max77696_gauge_probe (struct platform_device *pdev)
 
 	g_max77696_fg = me;
 
-	if (lab126_board_is(BOARD_ID_WARIO)) {
+	if (lab126_board_is(BOARD_ID_WARIO) ||
+			lab126_board_is(BOARD_ID_WOODY)) {
 		g_max77696_fg_cdata = &gauge_cdata_wario;
-	} else if (lab126_board_rev_greater(BOARD_ID_ICEWINE_WARIO_P5) || 
+	} else if (lab126_board_rev_greater(BOARD_ID_ICEWINE_WARIO_P5) ||
 		lab126_board_rev_greater(BOARD_ID_ICEWINE_WFO_WARIO_P5) ||
 		lab126_board_is(BOARD_ID_ICEWINE_WARIO_512) ||
 		lab126_board_is(BOARD_ID_ICEWINE_WFO_WARIO_512))  {
 		g_max77696_fg_cdata = &gauge_cdata_icewine_435V;
-	} else if (lab126_board_is(BOARD_ID_ICEWINE_WARIO_P5) || 
+	} else if (lab126_board_is(BOARD_ID_ICEWINE_WARIO_P5) ||
 		lab126_board_is(BOARD_ID_ICEWINE_WFO_WARIO_P5))  {
 		g_max77696_fg_cdata = &gauge_cdata_icewine_proto_435V;
-	} else if (lab126_board_is(BOARD_ID_ICEWINE_WARIO) || 
+	} else if (lab126_board_is(BOARD_ID_ICEWINE_WARIO) ||
 		lab126_board_is(BOARD_ID_ICEWINE_WFO_WARIO))  {
 		g_max77696_fg_cdata = &gauge_cdata_icewine_42V;
-	} else if ( lab126_board_is(BOARD_ID_PINOT) || 
+	} else if (lab126_board_is(BOARD_ID_PINOT) || 
 		lab126_board_is(BOARD_ID_PINOT_2GB) ||
 		lab126_board_is(BOARD_ID_PINOT_WFO_2GB) ||
 		lab126_board_is(BOARD_ID_PINOT_WFO) ||
@@ -2617,15 +2871,18 @@ static __devinit int max77696_gauge_probe (struct platform_device *pdev)
 	} else if (lab126_board_is(BOARD_ID_BOURBON_WFO) ||
 		lab126_board_is(BOARD_ID_BOURBON_WFO_PREEVT2)) {
 		g_max77696_fg_cdata = &gauge_cdata_bourbon;
+	} else if (lab126_board_is(BOARD_ID_WHISKY_WFO) || 
+		lab126_board_is(BOARD_ID_WHISKY_WAN)) {
+		g_max77696_fg_cdata = &gauge_cdata_whisky;
 	} else {
 		rc = -EINVAL;
-		dev_err(me->dev, "MG characterization data not found, check boardid [%d]\n", rc);	
+		dev_err(me->dev, "MG characterization data not found, check boardid [%d]\n", rc);
 		goto out_err_cdata;
 	}
 
 	INIT_DELAYED_WORK(&(me->psy_work), max77696_gauge_psy_work);
 	INIT_DELAYED_WORK(&(me->lobat_work), max77696_gauge_lobat_work);
-	INIT_DELAYED_WORK(&(me->batt_check_work), wario_battery_check_handler); 
+	INIT_DELAYED_WORK(&(me->batt_check_work), wario_battery_check_handler);
 
 	/* When current is not measured,
 	 * CURRENT_NOW and CURRENT_AVG properties should be invisible.
@@ -2654,7 +2911,11 @@ static __devinit int max77696_gauge_probe (struct platform_device *pdev)
 		max77696_gauge_reg_write_word(me, MISCCFG,  0x0003);
 		max77696_gauge_reg_write_word(me, LEARNCFG, 0x0007);
 	} else {
-		max77696_gauge_reg_write_word(me, MISCCFG,  0x0A10);	/* 10mA correction */
+		if (lab126_board_is(BOARD_ID_WHISKY_WFO) || 
+			lab126_board_is(BOARD_ID_WHISKY_WAN)) 
+			max77696_gauge_reg_write_word(me, MISCCFG,  0x0A11);	/* 10mA correction; SOC alerts based on AV */
+		else 
+			max77696_gauge_reg_write_word(me, MISCCFG,  0x0A10);	/* 10mA correction */
 	}
 
 	max77696_gauge_disable_irq(me,
@@ -2664,7 +2925,7 @@ static __devinit int max77696_gauge_probe (struct platform_device *pdev)
 	if (val & FG_STATUS_POR) {
 		me->por_bit_set = 1;
 		INIT_WORK(&me->init_work, max77696_gauge_init_work);
-		schedule_work(&me->init_work);		
+		schedule_work(&me->init_work);
 	} else {
 		me->init_complete = true;
 		max77696_gauge_update_availcap_rep(me, 1);
@@ -2676,7 +2937,7 @@ static __devinit int max77696_gauge_probe (struct platform_device *pdev)
 		}
 	}
 
-	schedule_delayed_work(&(me->batt_check_work), msecs_to_jiffies(BATT_ID_CHECK_INIT_INTERVAL)); 
+	schedule_delayed_work(&(me->batt_check_work), msecs_to_jiffies(BATT_ID_CHECK_INIT_INTERVAL));
 
 	rc = max77696_gauge_sysdev_register();
 	if (unlikely(rc)) {
@@ -2740,8 +3001,8 @@ static int max77696_gauge_suspend(struct device *dev)
 		return -EINVAL;
 	}
 
-	/* Don't suspend on low voltage 
-	 * since the PMIC's LOBAT/CRITBAT will shut us down soon 
+	/* Don't suspend on low voltage
+	 * since the PMIC's LOBAT/CRITBAT will shut us down soon
 	 */
 	if ( (wario_battery_voltage > 0) && (wario_battery_voltage <= SYS_SUSPEND_LOW_VOLT_THRESH))
 		return -EBUSY;
@@ -2777,6 +3038,19 @@ static int max77696_gauge_suspend(struct device *dev)
 
 	cancel_delayed_work_sync(&(me->lobat_work));
 	cancel_delayed_work_sync(&(me->psy_work));
+
+#ifdef CONFIG_FALCON
+	/* restrict FG sanity checks & restore logic to hibernate suspend/resume */
+	if(in_falcon()) {
+		int i = 0;
+		/* Save cell learned info before suspend/hibernate */
+	   	printk(KERN_INFO "Saving learned params as we seem to loose it!sometimes!");
+		memset(system_battlearn, 0x0, sizeof(system_battlearn));
+		for(i = 0; i < MAX77696_GAUGE_LEARNED_NR_INFOS; i++) {
+			max77696_gauge_read_learned(i, &system_battlearn[i]);
+		}
+	}
+#endif
 	return 0;
 }
 
@@ -2791,6 +3065,51 @@ static int max77696_gauge_resume(struct device *dev)
 		printk(KERN_ERR "KERNEL: E pmic:fg resume::characterization data not found\n");
 		return -EINVAL;
 	}
+
+#ifdef CONFIG_FALCON
+	/* restrict FG sanity checks & restore logic to hibernate suspend/resume */
+	if(in_falcon()) {
+		uint16_t readlearned[BATTLEARN_REG_BYTES];
+		int i = 0;
+		u16 val;
+
+		/* restore battery characterization if we have an unintended por bit set */
+		max77696_gauge_reg_read_word(me, STATUS, &val);
+		if (val & FG_STATUS_POR) {
+
+			printk(KERN_CRIT "KERNEL: I pmic:fg resume::this should not happen! unless POR "
+				"was set during a hibernate/suspend!, we'll try restoring battery "
+				"characterization");
+
+			rc = max77696_gauge_init_config(me);
+			if (rc) {
+				wario_battery_error_flags |= BATT_INI_ERROR;
+				printk(KERN_ERR "KERNEL: E pmic:fg resume::mg config init failed\n");
+				/* better to bail out here instead of proceeding with
+				 * messed up battery */
+				return rc;
+			}
+			printk(KERN_INFO "KERNEL: I pmic:fg resume::mg config init successful\n");
+		}
+
+		/* restore learned params if there is a mismatch */
+		memset(readlearned, 0, sizeof(readlearned));
+		for (i = 0; i < BATTLEARN_REG_BYTES; i++) {
+			max77696_gauge_read_learned(i, &readlearned[i]);
+		}
+
+		for (i = 0; i < BATTLEARN_REG_BYTES; i++) {
+			if (readlearned[i] != system_battlearn[i]) {
+				printk(KERN_ERR "KERNEL: E pmic:fg resume::Learned param "
+					"changed during FSHDN! read and saved values [%d]: "
+					"0x%x 0x%x", i, readlearned[i], system_battlearn[i]);
+	
+				printk(KERN_INFO "KERNEL: I pmic:fg resume::restoring it to saved...");
+				max77696_gauge_write_learned(i, system_battlearn[i]);
+			}
+		}
+	}
+#endif
 
 	max77696_gauge_update_avgcurrent(me, 1);
 	max77696_gauge_update_vcell(me, 1);	
@@ -2818,14 +3137,14 @@ static int max77696_gauge_resume(struct device *dev)
 		printk(KERN_ERR "KERNEL: E pmic:fg resume::FULLCAP(saved) failed\n");
 		return -EIO;
 	}
-	
+
 	rc = max77696_gauge_repcap_adj(me);
 	if (unlikely(rc)) {
 		printk(KERN_ERR "KERNEL: E pmic:fg resume::REPCAP(adj with AVCAP) failed\n");
 		return -EIO;
 	}
 
-	if (likely(me->init_complete)) {	
+	if (likely(me->init_complete)) {
 		if (likely(me->polling_properties)) {
 			schedule_delayed_work(&(me->psy_work), msecs_to_jiffies(BATT_RESUME_INTERVAL));
 		}
@@ -2891,7 +3210,7 @@ void max77696_gauge_write_learned_all ( u16* learned)
 	struct max77696_gauge *me = chip->gauge_ptr;
 
 	max77696_gauge_learned_write_all(me, learned);
-	
+
 }
 EXPORT_SYMBOL(max77696_gauge_write_learned_all);
 

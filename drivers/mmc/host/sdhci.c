@@ -1355,6 +1355,29 @@ static void sdhci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 		sdhci_reinit(host);
 	}
 
+#ifdef CONFIG_LAB126
+	/* handle mmc1 only */
+	if (mmc->card && mmc->index == 1) {
+		int enable = 1;
+
+		switch (ios->power_mode) {
+		case MMC_POWER_OFF:
+			enable = 0;
+			/* fall through to set power gpio */
+		case MMC_POWER_UP:
+#if defined(CONFIG_MX6SL_WARIO_BASE)
+			gpio_wifi_power_enable(enable);
+#endif
+#if defined(CONFIG_MX6SL_WARIO_WOODY)
+			brcm_gpio_wifi_power_enable(enable);
+#endif
+			/* fall through to break */
+		default:
+			break;
+		}
+	}
+#endif
+
 	sdhci_set_clock(host, ios->clock);
 
 	if (ios->power_mode == MMC_POWER_OFF)
@@ -2507,14 +2530,14 @@ int sdhci_resume_host(struct sdhci_host *host)
 			host->ops->enable_dma(host);
 	}
 
+	sdhci_init(host, (host->mmc->pm_flags & MMC_PM_KEEP_POWER));
+	mmiowb();
+
 	ret = request_irq(host->irq, sdhci_irq, 
 			  IRQF_SHARED | IRQF_SAMPLE_RANDOM,
 			  mmc_hostname(host->mmc), host);
 	if (ret)
 		goto out;
-
-	sdhci_init(host, (host->mmc->pm_flags & MMC_PM_KEEP_POWER));
-	mmiowb();
 
 	ret = mmc_resume_host(host->mmc);
 

@@ -42,6 +42,10 @@
 #define DRIVER_NAME    MAX77696_EH_NAME
 #define DRIVER_VERSION MAX77696_DRIVER_VERSION".0"
 
+#ifdef CONFIG_FALCON
+extern int in_falcon(void);
+#endif
+
 #ifdef VERBOSE
 #define dev_noise(args...) dev_dbg(args)
 #else /* VERBOSE */
@@ -507,6 +511,12 @@ static irqreturn_t max77696_eh_isr (int irq, void *data)
     max77696_eh_reg_read(me, CHGINB_INT, &(me->interrupted));
     dev_dbg(me->dev, "CHGINB_INT %02X EN %02X\n",
         me->interrupted, me->irq_unmask);
+#if defined(CONFIG_FALCON) && !defined(DEBUG)
+    if(in_falcon()){
+        printk(KERN_DEBUG "CHGINB_INT %02X EN %02X\n",
+	        me->interrupted, me->irq_unmask);
+	}
+#endif
     me->interrupted &= me->irq_unmask;
 
     if (me->interrupted & CHGB_INT_BCHGPOK) {

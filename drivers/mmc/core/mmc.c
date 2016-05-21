@@ -30,8 +30,10 @@
 #define HYNIX_MANF_ID		0x90
 #define MICRON_MANF_ID		0xFE
 
-#define HW_SUPPORT_EMMC_POWER_GATE  (lab126_board_is(BOARD_ID_MUSCAT_WFO) || \ 
-										lab126_board_is(BOARD_ID_MUSCAT_WAN))
+#define HW_SUPPORT_EMMC_POWER_GATE  (lab126_board_is(BOARD_ID_MUSCAT_WFO) || \
+                                      lab126_board_is(BOARD_ID_MUSCAT_WAN) ||\
+                                      lab126_board_is(BOARD_ID_WHISKY_WFO) ||\
+                                      lab126_board_is(BOARD_ID_WHISKY_WAN))
 
 static const unsigned int tran_exp[] = {
 	10000,		100000,		1000000,	10000000,
@@ -429,7 +431,7 @@ static int mmc_read_ext_csd(struct mmc_card *card, u8 *ext_csd)
 	else
 		card->erased_byte = 0x0;
 
-		card->ext_csd.raw_rst_n_function = ext_csd[EXT_CSD_RST_N_FUNCTION];
+	card->ext_csd.raw_rst_n_function = ext_csd[EXT_CSD_RST_N_FUNCTION];
 out:
 	return err;
 }

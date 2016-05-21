@@ -68,6 +68,8 @@ static struct notifier_block panic_block = {
 	.notifier_call = hung_task_panic,
 };
 
+extern void waiters_print(void);
+
 static void check_hung_task(struct task_struct *t, unsigned long timeout)
 {
 	unsigned long switch_count = t->nvcsw + t->nivcsw;
@@ -106,6 +108,8 @@ static void check_hung_task(struct task_struct *t, unsigned long timeout)
 			" disables this message.\n");
 	sched_show_task(t);
 	debug_show_held_locks(t);
+
+	waiters_print();
 
 	touch_nmi_watchdog();
 

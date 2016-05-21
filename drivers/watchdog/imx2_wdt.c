@@ -453,7 +453,7 @@ fail:
 	return ret;
 }
 
-#ifdef LAB126
+#ifdef CONFIG_LAB126
 
 void wdg_prep(void){
 	imx2_wdt_ping();
@@ -502,6 +502,15 @@ static struct platform_driver imx2_wdt_driver = {
 		.owner	= THIS_MODULE,
 	},
 };
+
+#ifdef CONFIG_LAB126
+void imx2_wdt_reinit(void)
+{
+	printk(KERN_INFO"%s re-initializing wdog\n",__FUNCTION__);
+	imx2_wdt_start();
+	imx2_wdt_timer_ping(0);
+}
+#endif
 
 static int __init imx2_wdt_init(void)
 {

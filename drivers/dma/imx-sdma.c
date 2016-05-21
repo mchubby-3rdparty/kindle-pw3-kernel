@@ -328,12 +328,21 @@ struct sdma_engine {
 	struct clk			*clk;
 	struct sdma_script_start_addrs	*script_addrs;
 	spinlock_t			irq_reg_lock;
+#ifdef CONFIG_FALCON
+	dma_addr_t			ccb_phys;
+	struct work_struct		deferred_resume_work;
+#endif
+ 	spinlock_t			channel_0_lock;
 };
 
 #define SDMA_H_CONFIG_DSPDMA	(1 << 12) /* indicates if the DSPDMA is used */
 #define SDMA_H_CONFIG_RTD_PINS	(1 << 11) /* indicates if Real-Time Debug pins are enabled */
 #define SDMA_H_CONFIG_ACR	(1 << 4)  /* indicates if AHB freq /core freq = 2 or 1 */
 #define SDMA_H_CONFIG_CSM	(3)       /* indicates which context switch mode is selected*/
+
+#if defined(CONFIG_PM) && defined(CONFIG_FALCON)
+static void imx_sdma_delayed_resume(struct work_struct *);
+#endif
 
 static inline u32 chnenbl_ofs(struct sdma_engine *sdma, unsigned int event)
 {
@@ -1355,7 +1364,7 @@ static void sdma_add_scripts(struct sdma_engine *sdma,
 			saddr_arr[i] = addr_arr[i];
 }
 
-static int __init sdma_get_firmware(struct sdma_engine *sdma,
+static int /*__init*/ sdma_get_firmware(struct sdma_engine *sdma,
 		const char *cpu_name, int to_version)
 {
 	const struct firmware *fw;
@@ -1480,6 +1489,9 @@ static int __init sdma_init(struct sdma_engine *sdma)
 
 	clk_disable(sdma->clk);
 
+#ifdef CONFIG_FALCON
+	sdma->ccb_phys = ccb_phys;
+#endif
 	return 0;
 
 err_dma_alloc:
@@ -1590,6 +1602,11 @@ static int __init sdma_probe(struct platform_device *pdev)
 		goto err_init;
 	}
 
+#if defined(CONFIG_PM) && defined(CONFIG_FALCON)
+	platform_set_drvdata(pdev, sdma);
+	INIT_WORK(&sdma->deferred_resume_work, imx_sdma_delayed_resume);
+#endif
+
 	dev_info(sdma->dev, "initialized\n");
 
 	return 0;
@@ -1615,9 +1632,95 @@ static int __exit sdma_remove(struct platform_device *pdev)
 	return -EBUSY;
 }
 
+#if defined(CONFIG_PM) && defined(CONFIG_FALCON)
+static void imx_sdma_delayed_resume(struct work_struct *work)
+{
+	int i;
+	struct sdma_engine *sdma = container_of(work, struct sdma_engine,
+						deferred_resume_work);
+	struct sdma_platform_data *pdata = sdma->dev->platform_data;
+
+	clk_enable(sdma->clk);
+
+	/* All channels have priority 0 */
+	for (i = 0; i < MAX_DMA_CHANNELS; i++)
+		writel_relaxed(0, sdma->regs + SDMA_CHNPRI_0 + i * 4);
+
+	sdma_config_ownership(&sdma->channel[0], false, true, false);
+
+	/* Set Command Channel (Channel Zero) */
+	writel_relaxed(0x4050, sdma->regs + SDMA_CHN0ADDR);
+
+	/* Set bits of CONFIG register but with static context switching */
+	/* FIXME: Check whether to set ACR bit depending on clock ratios */
+	writel_relaxed(0, sdma->regs + SDMA_H_CONFIG);
+
+	writel_relaxed(sdma->ccb_phys, sdma->regs + SDMA_H_C0PTR);
+
+	/* Set bits of CONFIG register with given context switching mode */
+	writel_relaxed(SDMA_H_CONFIG_CSM, sdma->regs + SDMA_H_CONFIG);
+
+	/* Initializes channel's priorities */
+	sdma_set_channel_priority(&sdma->channel[0], 7);
+
+	sdma_get_firmware(sdma, pdata->cpu_name, pdata->to_version);
+
+	/* Re-enable clock. Because, sdma_get_firmware() disables clock */
+	clk_enable(sdma->clk);
+
+	for (i = 1; i < MAX_DMA_CHANNELS; i++) {
+		struct sdma_channel *sdmac = &sdma->channel[i];
+
+		if(NULL != sdmac->bd) {
+			sdma_set_channel_priority(sdmac, MXC_SDMA_DEFAULT_PRIORITY);
+			sdma_config_channel(sdmac);
+		}
+	}
+
+	clk_disable(sdma->clk);
+}
+
+#include <mach/clock.h>
+static int imx_sdma_suspend(struct device *dev)
+{
+	return 0;
+}
+
+static int imx_sdma_resume(struct device *dev) {
+
+	struct sdma_engine *sdma = dev_get_drvdata(dev);
+	int i;
+	extern int in_falcon(void);
+
+	if (!in_falcon())
+		return 0;
+
+	clk_enable(sdma->clk);
+
+	/* Be sure SDMA has not started yet */
+	writel_relaxed(0, sdma->regs + SDMA_H_C0PTR);
+
+	/* disable all channels */
+	for (i = 0; i < sdma->num_events; i++)
+		writel_relaxed(0, sdma->regs + chnenbl_ofs(sdma, i));
+
+	clk_disable(sdma->clk);
+
+	return !schedule_work(&sdma->deferred_resume_work);
+}
+
+static const struct dev_pm_ops mxs_mmc_pm_ops = {
+	.suspend	= imx_sdma_suspend,
+	.resume		= imx_sdma_resume,
+};
+#endif /* CONFIG_PM && CONFIG_FALCON */
+
 static struct platform_driver sdma_driver = {
 	.driver		= {
 		.name	= "imx-sdma",
+#if defined(CONFIG_PM) && defined(CONFIG_FALCON)
+		.pm	= &mxs_mmc_pm_ops,
+#endif
 	},
 	.remove		= __exit_p(sdma_remove),
 };

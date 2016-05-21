@@ -24,10 +24,19 @@
 #include <linux/mutex.h>
 #include <linux/interrupt.h>
 #include <linux/i2c.h>
+#include <linux/delay.h>
 
 #include <linux/mfd/max77696.h>
 #include <linux/mfd/max77696-events.h>
 #include <max77696_registers.h>
+#include <mach/boardid.h>
+
+#ifdef CONFIG_FALCON
+#include <llog.h>
+extern int in_falcon(void);
+extern int pb_oneshot;
+extern void pb_oneshot_unblock_button_events (void);
+#endif
 
 #define DRIVER_DESC    "MAX77696 USB Interface Circuit Driver"
 #define DRIVER_AUTHOR  "Jayden Cha <jayden.cha@maxim-ic.com>"
@@ -69,19 +78,42 @@
 		 UIC_REG_BITMASK(reg, bit), UIC_REG_BITSET(reg, bit, val));\
 	 })
 
-#define UIC_PSY_WORK_DELAY           0
-#define UIC_BOOTUP_WORK_DELAY        3000		/* in milli seconds */
+#define UIC_PSY_WORK_DELAY                  0
+#define UIC_ADC_DEBOUNCE_DELAY              200
+#define UIC_ADC_DEBOUNCE_DELAY_RESUME       2000
+#define UIC_BOOTUP_WORK_DELAY               3000		/* in milli seconds */
+#define CHARGER_DETECTION_DELAY             1000		/* charger detection delay after forced charger deteciton */
+
+u8 wario_uic_chgtyp = 0;
+EXPORT_SYMBOL(wario_uic_chgtyp);
+extern int max77696_led_set_manual_mode(unsigned int led_id, bool manual_mode);
+extern int max77696_led_ctrl(unsigned int led_id, int led_state);
+extern int max77696_charger_set_otg(int enable);
+extern void asession_enable(bool detect);
+void otg_state_changed_stop_recovery(void);
+
+#ifdef CONFIG_POWER_SODA
+extern bool soda_charger_docked(void);
+extern void pmic_soda_connects_otg_in_out_handler(u8 in);
+extern void soda_otg_vbus_output(int en, int ping);
+#endif
+
+void pmic_soda_connects_notify_otg_in(void);
+void pmic_soda_connects_notify_otg_out(void);
 
 struct max77696_uic {
 	struct max77696_chip *chip;
 	struct max77696_i2c  *i2c;
 	struct device        *dev;
 	struct kobject       *kobj;
+	struct power_supply  psy;
 
 	void                  (*uic_notify) (const struct max77696_uic_notify*);
 
 	struct delayed_work   psy_work;
 	struct delayed_work   bootup_work;
+	struct delayed_work   adc_work;
+	struct delayed_work   charger_detect;
 	unsigned int          irq;
 	u8                    irq_unmask[2];
 	u8                    interrupted[2];
@@ -89,7 +121,10 @@ struct max77696_uic {
 	u8                    chg_type;
 	u8                    adc_code;
 	u8                    i_set;
+	bool                  in_otg;
+
 	struct mutex          lock;
+	int                   adc_work_delay;
 };
 static struct max77696_uic* g_max77696_uic;
 static pmic_event_callback_t chgtyp_detect;
@@ -135,6 +170,22 @@ static const char* max77696_uic_iset_string (u8 i_set)
 	return "(unknown)";
 }
 
+static int max77696_uic_iset_val_ua(u8 i_set)
+{
+	switch (i_set) {
+		case MAX77696_UIC_ISET_0mA: return 0;
+		case MAX77696_UIC_ISET_0P1A: return  100000;
+		case MAX77696_UIC_ISET_0P4A: return  400000;
+		case MAX77696_UIC_ISET_0P5A: return  500000;
+		case MAX77696_UIC_ISET_1A:   return 1000000;
+		case MAX77696_UIC_ISET_1P5A: return 1500000;
+		case MAX77696_UIC_ISET_2A:   return 2000000;
+	}
+
+	return 0;
+}
+
+
 /* UIC Event handling functions */
 int max77696_uic_mask1(void *obj, u16 event, bool mask_f)
 {
@@ -175,8 +226,8 @@ static struct max77696_event_handler max77696_chgtyp_handle = {
 	.event_id = EVENT_UIC_CHGTYP,
 };
 
-/* max77696_update_chgtyp: 
- * 		Update charger type & set ICL based on the output from UIC block
+/* max77696_update_chgtyp:
+ * Update charger type & set ICL based on the output from UIC block
  */
 static void max77696_update_chgtyp(struct max77696_uic *me)
 {
@@ -191,27 +242,30 @@ static void max77696_update_chgtyp(struct max77696_uic *me)
 	me->chg_type = UIC_REG_BITGET(STATUS1, CHGTYP, status[0]);
 	me->adc_code = UIC_REG_BITGET(STATUS2, ADC,    status[1]);
 
+	//usb charger type, not able to detect soda
 	if (me->chg_type) {
-		if ((me->adc_code != UIC_ADC_STATUS_INVALID_10) && (me->adc_code != UIC_ADC_STATUS_INVALID_13) && 
+		if ((me->adc_code != UIC_ADC_STATUS_INVALID_10) && (me->adc_code != UIC_ADC_STATUS_INVALID_13) &&
 				(me->adc_code != UIC_ADC_STATUS_INVALID_16)) {
 
 			/* Enable AUTH500 to avoid charge current issue while vbus droops */
 			max77696_uic_reg_read(me, CHGCTRL, &chg_ctrl);
 			max77696_uic_reg_write(me, CHGCTRL, (chg_ctrl | UIC_CHGCTRL_AUTH500_M));
 			pr_debug("Enable chgctrl AUTH500 \n");
-			
+
 			/* update CHGINA_ICL */
 			rc = max77696_charger_set_icl();
-			if (!rc) 
+			if (!rc)
 				me->i_set = MAX77696_UIC_ISET_0P5A;
 
-		} 
+		}
 	} else if (unlikely(!me->vb_volt)) {
 		/* This time is when the cable is removed. */
 		me->chg_type = 0;
 		me->adc_code = 0;
 		me->i_set    = 0;
 	}
+
+	wario_uic_chgtyp = me->chg_type;
 
 	pr_debug("VBVOLT %X CHGTYP %X ADC %X ISET %X", me->vb_volt, me->chg_type, me->adc_code, me->i_set);
 	pr_debug("Detected USB Charger  %s\n", max77696_uic_chgtype_string(me->chg_type));
@@ -228,6 +282,7 @@ static void max77696_update_chgtyp(struct max77696_uic *me)
 			me->uic_notify(&noti);
 		}
 	}
+	power_supply_changed(&(me->psy));
 }
 
 static void max77696_uic_bootup_handler (struct work_struct *work)
@@ -238,7 +293,7 @@ static void max77696_uic_bootup_handler (struct work_struct *work)
 	__lock(me);
 
 	if (!IS_SUBDEVICE_LOADED(charger, chip)) {
-		schedule_delayed_work(&(me->bootup_work), msecs_to_jiffies(UIC_BOOTUP_WORK_DELAY));	
+		schedule_delayed_work(&(me->bootup_work), msecs_to_jiffies(UIC_BOOTUP_WORK_DELAY));
 	} else {
 		max77696_update_chgtyp(me);
 		uic_boot_flag = 0;
@@ -251,7 +306,6 @@ static void max77696_uic_bootup_handler (struct work_struct *work)
 static void chgtyp_detect_cb(void *obj, void *param)
 {
 	struct max77696_uic *me = (struct max77696_uic *)param;
-
 	__lock(me);
 
 	if (!uic_boot_flag) {
@@ -268,18 +322,178 @@ static void max77696_uic_psy_work (struct work_struct *work)
 	return;
 }
 
+static void max77696_uic_charger_detect_work(struct work_struct *work)
+{
+	struct max77696_uic *me = container_of(work, struct max77696_uic, charger_detect.work);
+	u8 status[2];
+
+	__lock(me);
+	max77696_uic_reg_bulk_read(me, STATUS1, status, 2);
+	me->chg_type = UIC_REG_BITGET(STATUS1, CHGTYP, status[0]);
+	wario_uic_chgtyp = me->chg_type;
+	__unlock(me);
+	return;
+}
+
+static void max77696_uic_adc_work(struct work_struct *work)
+{
+	struct max77696_uic *me = container_of(work, struct max77696_uic, adc_work.work);
+	int ret;
+	u8 adcval;
+	int retry = 5;
+	__lock(me);
+	/*vbus can be noisy and affect i2c, retry to make sure this packet is going through*/
+	do {
+		ret = max77696_uic_reg_get_bit(me, STATUS2, ADC, &adcval);
+		if (ret) {
+			dev_err(me->dev, "uic status (adc val) failed [%d] usb noise ?\n", ret);
+			msleep(100);
+		}
+	}while(ret && retry-- > 0);
+
+	__unlock(me);
+
+	if (unlikely(ret)) {
+		dev_err(me->dev, "uic status (adc val) failed [%d]\n", ret);
+		
+	} else{
+#ifdef CONFIG_POWER_SODA		
+		pmic_soda_connects_otg_in_out_handler(!adcval);
+#else
+		if(adcval == 0 && !me->in_otg)
+			pmic_soda_connects_notify_otg_in();
+		else if (adcval > 0 && me->in_otg)
+			pmic_soda_connects_notify_otg_out();
+#endif
+		printk(KERN_DEBUG "%s adcval %d in_otg %d", __func__, adcval, me->in_otg);
+	}
+
+}
+
+void pmic_soda_connects_notify_otg_in(void){
+	printk(KERN_ERR "%s:%d OTG!\n",__FUNCTION__,__LINE__);
+	g_max77696_uic->in_otg = 1;
+#ifdef CONFIG_POWER_SODA
+	if(false == soda_charger_docked())
+		return;
+#endif
+
+	if (IS_SUBDEVICE_LOADED(charger, g_max77696_uic->chip)) {
+#if defined(CONFIG_MX6SL_WARIO_BASE)
+		/* Turn OFF amber led - manual mode */
+		max77696_led_ctrl(MAX77696_LED_AMBER, MAX77696_LED_OFF);
+		/* Turn OFF green led - manual mode */
+		max77696_led_ctrl(MAX77696_LED_GREEN, MAX77696_LED_OFF);
+#endif
+
+#ifdef CONFIG_POWER_SODA		
+		//bypassing powerd and set this pin behind the scene..
+		soda_otg_vbus_output(1, 0);
+#else
+		max77696_charger_set_otg(1);
+#endif
+
+		asession_enable(1);
+		max77696_charger_set_icl();
+	}
+	g_max77696_uic->adc_work_delay = UIC_ADC_DEBOUNCE_DELAY;
+} 
+#ifdef CONFIG_POWER_SODA
+EXPORT_SYMBOL(pmic_soda_connects_notify_otg_in);
+#endif
+
+void pmic_soda_connects_notify_otg_out(void){
+	printk(KERN_ERR"%s:%d\n",__FUNCTION__,__LINE__);
+	g_max77696_uic->in_otg = 0;
+	if (IS_SUBDEVICE_LOADED(charger, g_max77696_uic->chip)) {
+#if defined(CONFIG_MX6SL_WARIO_BASE)
+		max77696_led_set_manual_mode(MAX77696_LED_AMBER, false);
+		max77696_led_set_manual_mode(MAX77696_LED_GREEN, false);
+#endif
+		max77696_charger_set_otg(0);
+		asession_enable(0);
+#ifdef CONFIG_POWER_SODA
+		if(false == soda_charger_docked())
+			return;
+
+		//toggling boost after OTG is enumerated is a no-opt for hardware. Hardware would still boost anyway. 
+		// so the concept of "locking boost", is actually hardware
+		// powerd or whoever can toggle boost in software, but the hardware would not listen.
+
+		// this only place this function is sending user space event to notify powerd, 
+		// boost control is handed over now. Powerd needs to set boost according to the battery state.
+
+		soda_otg_vbus_output(0, 1);		
+#endif
+	}		
+	g_max77696_uic->adc_work_delay = UIC_ADC_DEBOUNCE_DELAY;
+}
+#ifdef CONFIG_POWER_SODA
+EXPORT_SYMBOL(pmic_soda_connects_notify_otg_out);
+#endif
+
+int max77696_uic_force_charger_detection(void)
+{
+	struct max77696_uic *me = g_max77696_uic;
+	int ret = 0;
+
+	if (!me)
+		return -ENODEV;
+	__lock(me);
+	max77696_uic_reg_set_bit(me, CDETCTRL, CHGTYPMAN, 1);
+	__unlock(me);
+	schedule_delayed_work(&(me->charger_detect), msecs_to_jiffies(CHARGER_DETECTION_DELAY));
+	return ret;
+}
+EXPORT_SYMBOL(max77696_uic_force_charger_detection);
+
+int max77696_uic_is_otg_connected_irq(void){
+	return (g_max77696_uic && g_max77696_uic->in_otg);
+}
+EXPORT_SYMBOL(max77696_uic_is_otg_connected_irq);
+
+int max77696_uic_is_otg_connected(void)
+{
+	struct max77696_uic *me = g_max77696_uic;
+	int ret = 0;
+	u8 adcval = 0xff;
+
+	__lock(me);
+	
+	ret = max77696_uic_reg_get_bit(me, STATUS2, ADC, &adcval);
+	if (unlikely(ret)) {
+		dev_err(me->dev, "uic status (adc val) failed [%d]\n", ret);
+		ret = 0;
+	}else {
+		ret = (adcval == 0);
+	}
+
+	__unlock(me);
+	return ret;
+}
+EXPORT_SYMBOL(max77696_uic_is_otg_connected);
+
 static irqreturn_t max77696_uic_isr (int irq, void *data)
 {
 	struct max77696_uic *me = data;
-
+	int ret;
 	/* read INT register to clear bits ASAP */
+
 	max77696_uic_reg_bulk_read(me, INT1, me->interrupted, 2);
+
 	pr_debug("INT1 %02X INT2 %02X\n", me->interrupted[0], me->interrupted[1]);
 
 	if (me->interrupted[0] & UIC_INT1_CHGTYP_M) {
 		schedule_delayed_work(&(me->psy_work), msecs_to_jiffies(UIC_PSY_WORK_DELAY));
-	}
+	} 
 
+	if(LAB126_BOARDS_ENABLE_USB_OTG) {
+		if (me ->interrupted[1] & UIC_INT2_ADC_M) {
+			ret = cancel_delayed_work(&(me->adc_work));
+			printk(KERN_DEBUG "%s: cancel: %d", __func__, ret);
+			schedule_delayed_work(&(me->adc_work), msecs_to_jiffies(me->adc_work_delay));
+		}
+	}
 	return IRQ_HANDLED;
 }
 
@@ -470,6 +684,35 @@ static const struct attribute_group max77696_uic_attr_group = {
 	.attrs = max77696_uic_attr,
 };
 
+static enum power_supply_property max77696_uic_psy_props[] = {
+	POWER_SUPPLY_PROP_PRESENT,
+	POWER_SUPPLY_PROP_CURRENT_MAX,
+};
+
+static int max77696_uic_get_property (struct power_supply *psy,
+	enum power_supply_property psp, union power_supply_propval *val)
+{
+	struct max77696_uic *me = container_of(psy, struct max77696_uic, psy);
+	int rc = 0;
+
+	__lock(me);
+
+	switch (psp) {
+		case POWER_SUPPLY_PROP_PRESENT:
+			val->intval = me->vb_volt != 0;
+			break;
+		case POWER_SUPPLY_PROP_CURRENT_MAX:
+			val->intval = max77696_uic_iset_val_ua(me->i_set);
+			break;
+		default:
+			rc = -EINVAL;
+			break;
+	}
+
+	__unlock(me);
+	return rc;
+}
+
 static __devinit int max77696_uic_probe (struct platform_device *pdev)
 {
 	struct max77696_chip *chip = dev_get_drvdata(pdev->dev.parent);
@@ -502,19 +745,32 @@ static __devinit int max77696_uic_probe (struct platform_device *pdev)
 
 	g_max77696_uic = me;
 	uic_boot_flag = 1;
-	
-	/* Note: Disable UIC manctrl set during early boot 
+
+	me->psy.name = DRIVER_NAME;
+	me->psy.type = POWER_SUPPLY_TYPE_USB;
+	me->psy.properties = max77696_uic_psy_props;
+	me->psy.num_properties = ARRAY_SIZE(max77696_uic_psy_props);
+	me->psy.get_property = max77696_uic_get_property;
+
+	if ((rc = power_supply_register(me->dev, &(me->psy)))) {
+		dev_err(me->dev, "failed to register power supply device (%d)\n", rc);
+		goto out_err_reg_psy;
+	}
+
+	/* Note: Disable UIC manctrl set during early boot
 	 * ICL controlled by CHGA based on the charger type
 	 * which is non-sticky */
 	max77696_uic_reg_write(me, MANCTRL, 0x0);
-	
+
 	INIT_DELAYED_WORK(&(me->psy_work), max77696_uic_psy_work);
+	INIT_DELAYED_WORK(&(me->adc_work), max77696_uic_adc_work);
 	INIT_DELAYED_WORK(&(me->bootup_work), max77696_uic_bootup_handler);
+	INIT_DELAYED_WORK(&(me->charger_detect), max77696_uic_charger_detect_work);
 
 	rc = sysfs_create_group(me->kobj, &max77696_uic_attr_group);
 	if (unlikely(rc)) {
 		dev_err(me->dev, "failed to create attribute group [%d]\n", rc);
-		goto out_err;
+		goto out_err_sysfs;
 	}
 
 	/* Disable all UIC interrupts */
@@ -553,6 +809,11 @@ static __devinit int max77696_uic_probe (struct platform_device *pdev)
 	pr_info(DRIVER_DESC" "DRIVER_VERSION" Installed\n");
 	SUBDEVICE_SET_LOADED(uic, chip);
 
+	if(LAB126_BOARDS_ENABLE_USB_OTG) {
+		max77696_uic_reg_set_bit(me, INTMASK2, ADC, 1);
+		max77696_uic_reg_set_bit(me, SYSCTRL2, ADC_EN, 1);
+		max77696_uic_reg_set_bit(me, SYSCTRL2, ADC_DEB, 0x3);
+	}
 	return 0;
 
 out_err_sub_event:
@@ -561,7 +822,9 @@ out_err_reg_event:
 	free_irq(me->irq, me);
 out_err_req_irq:
 	sysfs_remove_group(me->kobj, &max77696_uic_attr_group);
-out_err:
+out_err_sysfs:
+	power_supply_unregister(&(me->psy));
+out_err_reg_psy:
 	g_max77696_uic = NULL;
 	platform_set_drvdata(pdev, NULL);
 	mutex_destroy(&(me->lock));
@@ -580,9 +843,12 @@ static __devexit int max77696_uic_remove (struct platform_device *pdev)
 
 	free_irq(me->irq, me);
 	cancel_delayed_work(&(me->psy_work));
+	cancel_delayed_work_sync(&(me->adc_work));
 	cancel_delayed_work(&(me->bootup_work));
-
+	cancel_delayed_work(&(me->charger_detect));
 	sysfs_remove_group(me->kobj, &max77696_uic_attr_group);
+
+	power_supply_unregister(&(me->psy));
 
 	g_max77696_uic = NULL;
 	platform_set_drvdata(pdev, NULL);
@@ -592,9 +858,60 @@ static __devexit int max77696_uic_remove (struct platform_device *pdev)
 	return 0;
 }
 
+static int max77696_uic_suspend (struct device *dev)
+{
+	struct platform_device *pdev = to_platform_device(dev);
+	struct max77696_uic *me = platform_get_drvdata(pdev);
+	if(LAB126_BOARDS_ENABLE_USB_OTG) {
+		me->adc_work_delay = UIC_ADC_DEBOUNCE_DELAY_RESUME;
+		__lock(me);
+		max77696_uic_reg_set_bit(me, INTMASK2, ADC, 0);
+		max77696_uic_reg_set_bit(me, SYSCTRL2, ADC_EN, 0);
+		me->in_otg = 0; //disable ID pin detect
+		__unlock(me);
+		cancel_delayed_work(&(me->adc_work));
+	}
+	return 0;
+}
+
+static int max77696_uic_resume (struct device *dev)
+{
+	struct platform_device *pdev = to_platform_device(dev);
+	struct max77696_uic *me = platform_get_drvdata(pdev);
+#ifdef CONFIG_FALCON
+	u8 uicwk_status = 0;
+	if (in_falcon()) {
+		max77696_uic_reg_get_bit(me, INTSTS, UICWK, &uicwk_status);
+		if (uicwk_status) {
+			if(pb_oneshot == HIBER_SUSP) {
+				pb_oneshot = HIBER_CHG_IRQ;
+				pb_oneshot_unblock_button_events();
+			}
+			LLOG_DEVICE_METRIC(DEVICE_METRIC_HIGH_PRIORITY,
+			DEVICE_METRIC_TYPE_COUNTER, "kernel", DRIVER_NAME,
+			"hibernate_wakeup_UIC", 1, "");
+		}
+	}
+#endif
+	if(LAB126_BOARDS_ENABLE_USB_OTG) {
+		__lock(me);
+		max77696_uic_reg_set_bit(me, INTMASK2, ADC, 1);
+		max77696_uic_reg_set_bit(me, SYSCTRL2, ADC_EN, 1);
+		__unlock(me);
+#if defined(CONFIG_POWER_SODA)
+		if(max77696_uic_is_otg_connected() && soda_charger_docked())
+			max77696_charger_set_icl();
+#endif
+	}
+	return 0;
+}
+
+static SIMPLE_DEV_PM_OPS(max77696_uic_pm, max77696_uic_suspend, max77696_uic_resume);
+
 static struct platform_driver max77696_uic_driver = {
 	.driver.name  = DRIVER_NAME,
 	.driver.owner = THIS_MODULE,
+	.driver.pm    = &max77696_uic_pm,
 	.probe        = max77696_uic_probe,
 	.remove       = __devexit_p(max77696_uic_remove),
 };

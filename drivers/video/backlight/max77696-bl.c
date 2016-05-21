@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2012 Maxim Integrated Product
  * Jayden Cha <jayden.cha@maxim-ic.com>
- * Copyright 2012-2013 Amazon Technologies, Inc.
+ * Copyright 2012-2015 Amazon Technologies, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -53,6 +53,7 @@ struct max77696_bl {
 	struct backlight_device *bd;
 	int                      brightness;
 	struct mutex             lock;
+	int                      do_force_update;
 };
 
 struct backlight_device *backlight = NULL;
@@ -102,7 +103,7 @@ static __inline int max77696_bl_set (struct max77696_bl *me, int brightness)
 	brightness = min_t(int, MAX_BRIGHTNESS, brightness);
 	brightness = max_t(int, MIN_BRIGHTNESS, brightness);
 
-	if (unlikely(me->brightness == brightness)) {
+	if (unlikely(me->brightness == brightness && !me->do_force_update)) {
 		goto out;
 	}
 
@@ -136,6 +137,7 @@ static __inline int max77696_bl_set (struct max77696_bl *me, int brightness)
 	me->brightness = brightness;
 
 out:
+	me->do_force_update = 0;
 	return rc;
 }
 
@@ -164,13 +166,26 @@ static int max77696_bl_update_status (struct backlight_device *bd)
 static int max77696_bl_get_brightness (struct backlight_device *bd)
 {
 	struct max77696_bl *me = bl_get_data(bd);
-	int rc;
+	int rc = 0;
+	u8 buf[2];
+	u8 enable = 0;
 
 	__lock(me);
 
-	/* Should we read real values from a device ??? */
-	rc = me->brightness;
+	max77696_bl_reg_get_bit(me, LEDBST_CNTRL1, LED1EN, &enable);
+	if (enable) {
+		/* LED1CURRENT_1 (MSB: BIT11 ~ BIT4), LED1CURRENT_2 (LSB: BIT3 ~ BIT0) */
+		rc = max77696_bl_reg_bulk_read(me, LED1CURRENT_1, buf, 2);
+		if (unlikely(rc)) {
+			dev_err(me->dev, "LED1CURRENT read failed %d\n", rc);
+			goto out;
+		}
+		rc = (int)((buf[0] << 4) | (buf[1] & 0xf));
+	} else { /* FL LED source disabled */	
+		rc = MIN_BRIGHTNESS;
+	}
 
+out:
 	__unlock(me);
 	return rc;
 }
@@ -194,6 +209,19 @@ static long fl_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	int val = 0;
 
 	switch (cmd) {
+		case FL_IOCTL_SET_INTENSITY_FORCED:
+			if (get_user(val, argp))
+				return -EFAULT;
+			else {
+				struct max77696_bl *me;
+				mutex_lock(&backlight->update_lock);
+				me = bl_get_data(backlight);
+				backlight->props.brightness = val;
+				me->do_force_update = 1;
+				ret = max77696_bl_update_status(backlight);
+				mutex_unlock(&backlight->update_lock);
+			}
+			break;
 		case FL_IOCTL_SET_INTENSITY:
 			if (get_user(val, argp))
 				return -EFAULT;
@@ -252,8 +280,14 @@ static struct miscdevice fl_misc_device =
 static __devinit int max77696_bl_probe (struct platform_device *pdev)
 {
 	struct max77696_chip *chip = dev_get_drvdata(pdev->dev.parent);
+	struct max77696_backlight_platform_data *pdata = pdev->dev.platform_data;
 	struct max77696_bl *me;
 	int rc;
+
+	if (unlikely(!pdata)) {
+		dev_err(&(pdev->dev), "platform data is missing\n");
+		return -EINVAL;
+	}
 
 	me = kzalloc(sizeof(*me), GFP_KERNEL);
 	if (unlikely(!me)) {
@@ -279,8 +313,9 @@ static __devinit int max77696_bl_probe (struct platform_device *pdev)
 	platform_set_drvdata(pdev, me->bd);
 
 	/* Update current */
-	me->brightness = WARIO_FL_LEVEL12_MID;
-	me->bd->props.brightness = WARIO_FL_LEVEL12_MID;
+	me->brightness = pdata->brightness;
+	me->bd->props.brightness = pdata->brightness;
+	me->do_force_update = 0;
 	backlight_update_status(me->bd);
 
 	backlight = me->bd;

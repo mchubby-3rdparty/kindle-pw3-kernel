@@ -1401,7 +1401,7 @@ static int mmc_blk_alloc_parts(struct mmc_card *card, struct mmc_blk_data *md)
 			return ret;
 		ret = mmc_blk_alloc_part(card, md, EXT_CSD_PART_CONFIG_ACC_BOOT1,
 					 card->ext_csd.boot_size >> 9,
-					 true,
+					 false,
 					 "boot1");
 		if (ret)
 			return ret;

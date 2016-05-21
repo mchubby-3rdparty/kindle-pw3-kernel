@@ -330,7 +330,9 @@ void arch_idle_single_core(void)
                                     mx6sl_wfi_va, mx6sl_wfi_pa, mx6sl_wfi_attr))
 					;;
 
+#ifdef CONFIG_IMX2_WDT
 				wdg_prep();
+#endif
 
 				/* Need to run WFI code from IRAM so that
 				 * we can lower DDR freq.

@@ -45,6 +45,10 @@
 #define dev_verbose(args...) do { } while (0)
 #endif /* VERBOSE */
 
+#ifdef CONFIG_FALCON
+extern int in_falcon(void);
+#endif
+
 #define LDO_VREG_NAME                 MAX77696_LDO_NAME"-vreg"
 #define LDO_VREG_DESC_NAME(_name)     MAX77696_NAME"-vreg-"_name
 #define LDO_NREG                      MAX77696_LDO_NR_REGS
@@ -730,6 +734,11 @@ static int max77696_ldo_vreg_suspend (struct platform_device *pdev, pm_message_t
     struct regulator_dev *rdev = platform_get_drvdata(pdev);
     struct max77696_ldo_vreg_desc *desc = VREG_DESC(pdev->id);
 
+#ifdef CONFIG_FALCON
+    /* don't change LDO7 voltage during hibernation suspend - taken care by fbios before FSHDN */	
+    if(in_falcon()) return 0;
+#endif
+
     if (desc->suspend_uV && (!lab126_board_is(BOARD_ID_BOURBON_WFO) &&
 	    !lab126_board_is(BOARD_ID_WARIO_4_256M_CFG_C) &&
 	    !lab126_board_is(BOARD_ID_BOURBON_WFO_PREEVT2)) ) {
@@ -743,6 +752,11 @@ static int max77696_ldo_vreg_resume (struct platform_device *pdev)
 {
     struct regulator_dev *rdev = platform_get_drvdata(pdev);
     struct max77696_ldo_vreg_desc *desc = VREG_DESC(pdev->id);
+    
+#ifdef CONFIG_FALCON
+    /* don't change LDO7 voltage during hibernation resume - taken care by uboot */	
+    if(in_falcon()) return 0;
+#endif
 
     if (desc->resume_uV && (!lab126_board_is(BOARD_ID_BOURBON_WFO) &&
 	    !lab126_board_is(BOARD_ID_WARIO_4_256M_CFG_C) &&

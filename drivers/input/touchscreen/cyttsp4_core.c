@@ -52,6 +52,8 @@
 #include <linux/miscdevice.h>
 #include <mach/boardid.h>
 #include <llog.h>
+#include <linux/regulator/driver.h>
+#include <linux/regulator/machine.h>
 
 #define CY_CORE_MODE_CHANGE_TIMEOUT		1000
 #define CY_CORE_RESET_AND_WAIT_TIMEOUT		1000
@@ -62,6 +64,7 @@
 /* Delay after switching touch load switch on or off */
 #define CY_LOAD_SWITCH_DELAY_MS 1
 
+#define CY_LOAD_SWTICH_ADDED_DELAY 50
 MODULE_FIRMWARE(CY_FW_FILE_NAME);
 
 extern void gpio_init_touch_switch_power(void);
@@ -122,6 +125,8 @@ struct cyttsp4_core_data {
 	bool wd_timer_started;
 	bool exlock;
 	u8 grip_sup_en;
+	struct regulator* vdda; // only if(CONFIG_BOARD_DISP_TOUCH_LS_IN_MAX77696)
+	struct regulator* vddd; // only if(CONFIG_BOARD_DISP_TOUCH_LS_IN_MAX77696)
 };
 
 /* Initial grip suppression settings. Values are in % of screen dimension */
@@ -146,11 +151,12 @@ unsigned long long g_cyttsp4_timeofdata_us;
 EXPORT_SYMBOL(g_cyttsp4_timeofdata_us);
 #endif
 
-/*between 4 and 49 inclusive may have load switches. rev50 would not have load switches. */
-#define TOUCH_HAS_LOAD_SWITCHES ((lab126_board_rev_greater(BOARD_ID_ICEWINE_WARIO_512_EVT4) || \
-								lab126_board_rev_greater(BOARD_ID_ICEWINE_WFO_WARIO_512_EVT4)) && \
-								!lab126_board_rev_greater_eq(BOARD_ID_ICEWINE_PRQ_NO_LSW) && \
-								!lab126_board_rev_greater_eq(BOARD_ID_ICEWINE_WFO_PRQ_NO_LSW) )
+/*Icewine between 4 and 49 inclusive may have load switches. rev50 would not have load switches. */
+#define TOUCH_HAS_LOAD_SWITCHES ( (CONFIG_BOARD_DISP_TOUCH_LS_IN_MAX77696) || \
+                            ( (lab126_board_rev_greater(BOARD_ID_ICEWINE_WARIO_512_EVT4) || \
+                              lab126_board_rev_greater(BOARD_ID_ICEWINE_WFO_WARIO_512_EVT4)) && \
+                              !lab126_board_rev_greater_eq(BOARD_ID_ICEWINE_PRQ_NO_LSW) && \
+                              !lab126_board_rev_greater_eq(BOARD_ID_ICEWINE_WFO_PRQ_NO_LSW)) )
 
 struct atten_node {
 	struct list_head node;
@@ -204,6 +210,37 @@ void cyttsp4_pr_buf(struct device *dev, u8 *pr_buf, u8 *dptr, int size,
 }
 EXPORT_SYMBOL(cyttsp4_pr_buf);
 #endif
+
+static void cyttsp4_vdda_vddd_enable(struct cyttsp4_core_data* cd, bool en)
+{
+	if(CONFIG_BOARD_DISP_TOUCH_LS_IN_MAX77696)
+	{
+		if(!cd->vdda || !cd->vddd) {
+			dev_err(cd->dev, "null regulator %s..", __func__);
+			return; 
+		}
+		if(en) {
+			if(!regulator_is_enabled(cd->vdda))
+				regulator_enable(cd->vdda);
+			if(!regulator_is_enabled(cd->vddd))
+				regulator_enable(cd->vddd);
+		} else {
+			if(regulator_is_enabled(cd->vdda))
+				regulator_disable(cd->vddd);
+			if(regulator_is_enabled(cd->vdda))
+				regulator_disable(cd->vdda);
+		}
+	}else{
+		if(en) {
+			gpio_touch_switch_power_3v2(en);
+			gpio_touch_switch_power_1v8(en);
+		} else {
+			gpio_touch_switch_power_1v8(en);
+			gpio_touch_switch_power_3v2(en);
+		}
+	}
+}
+
 
 static int cyttsp4_load_status_regs(struct cyttsp4_core_data *cd)
 {
@@ -867,13 +904,17 @@ static void cyttsp4_toggle_loadswitch(struct cyttsp4_core_data *cd)
 
 	/* reset hardware and wait for heartbeat */
 	gpio_touch_reset_irq_switch(0);
-	gpio_touch_switch_power_1v8(0);
-	gpio_touch_switch_power_3v2(0);
+	cyttsp4_vdda_vddd_enable(cd, 0);
 	msleep(CY_LOAD_SWITCH_DELAY_MS);
-	gpio_touch_switch_power_3v2(1);
-	gpio_touch_switch_power_1v8(1);
+	cyttsp4_vdda_vddd_enable(cd, 1);
 	gpio_touch_reset_irq_switch(1);
 	msleep(CY_LOAD_SWITCH_DELAY_MS);
+
+	/* add delay between RST & interrupt enable to solve the i2c timeout */
+	/* WS-725 */
+	if(lab126_board_is(BOARD_ID_WHISKY_WFO) ||
+			lab126_board_is(BOARD_ID_WHISKY_WAN))
+		msleep(CY_LOAD_SWTICH_ADDED_DELAY);
 
 	enable_irq(cd->irq);
 	atomic_set(&cd->ignore_irq, 0);
@@ -1214,6 +1255,8 @@ static void cyttsp4_watchdog_work(struct work_struct *work)
 		dev_err(cd->dev,
 			"%s: failed to access device in watchdog timer r=%d\n",
 			__func__, retval);
+		LLOG_DEVICE_METRIC(DEVICE_METRIC_LOW_PRIORITY, DEVICE_METRIC_TYPE_COUNTER,
+				"kernel", CYTTSP4_CORE_NAME, "ESD-watchdog-no-i2c", 1, "");
 		if (!work_pending(&cd->startup_work))
 		{
 			cd->startup_state = STARTUP_NONE;
@@ -1227,7 +1270,8 @@ static void cyttsp4_watchdog_work(struct work_struct *work)
 		dev_err(cd->dev,
 			"%s: device found in bootloader mode when operational mode 0x%02X, 0x%02X\n",
 			__func__, mode[0], mode[1]);
-
+		LLOG_DEVICE_METRIC(DEVICE_METRIC_LOW_PRIORITY, DEVICE_METRIC_TYPE_COUNTER,
+				"kernel", CYTTSP4_CORE_NAME, "ESD-watchdog-bl-reset", 1, "");
 		//ignore the start up state to make sure queue start up would always schedule a restart.
 		if (!work_pending(&cd->startup_work))
 		{
@@ -1530,8 +1574,14 @@ static int cyttsp4_request_restart_(struct cyttsp4_device *ttsp)
 {
 	struct cyttsp4_core *core = ttsp->core;
 	struct cyttsp4_core_data *cd = dev_get_drvdata(&core->dev);
-
+	
+	if(TOUCH_HAS_LOAD_SWITCHES)
+		cyttsp4_stop_wd_timer(cd);
+	
 	cyttsp4_startup(cd);
+			
+	if(TOUCH_HAS_LOAD_SWITCHES && !recovery_mode)
+		cyttsp4_start_wd_timer(cd);
 
 	return 0;
 }
@@ -2096,8 +2146,7 @@ static int cyttsp4_core_sleep_(struct cyttsp4_core_data *cd)
 		cd->startup_state = STARTUP_NONE;
 		cd->sleep_state = SS_SLEEP_ON;
 		gpio_touch_reset_irq_switch(0);
-		gpio_touch_switch_power_1v8(0);
-		gpio_touch_switch_power_3v2(0);
+		cyttsp4_vdda_vddd_enable(cd, 0);
 		msleep(CY_LOAD_SWITCH_DELAY_MS);
 		atomic_set(&cd->ignore_irq, 0);
 		dev_info(cd->dev, "sleep tight~");
@@ -2383,7 +2432,7 @@ static int cyttsp4_startup_2(struct cyttsp4_core_data *cd)
 	dev_info(cd->dev, "%s: cyttsp4_exit startup r=%d...\n", __func__, rc);
 
 exit:
-	if(cd->wd_timer_started)
+	if(cd->wd_timer_started && !recovery_mode)
 		cyttsp4_start_wd_timer(cd);
 	mutex_unlock(&cd->startup_lock);
 	return rc;
@@ -2706,12 +2755,32 @@ static ssize_t cyttsp4_hw_reset_store(struct device *dev,
 
 	switch(buf[0]){
 		case 'a':
-		gpio_touch_switch_power_1v8(buf[1] == '1');
+			if(CONFIG_BOARD_DISP_TOUCH_LS_IN_MAX77696) {
+				if(buf[1] == '1') {
+					if(!regulator_is_enabled(cd->vddd))
+						regulator_enable(cd->vddd);
+				}else {
+					if(regulator_is_enabled(cd->vddd))
+						regulator_disable(cd->vddd);
+				}
+			} else {
+				gpio_touch_switch_power_1v8(buf[1] == '1');
+			}
 			printk(KERN_ERR "1v8 switch!!%d", buf[1] == '1');
 			return size;
 		break;
 		case 'b':
-			gpio_touch_switch_power_3v2(buf[1] == '1');
+			if(CONFIG_BOARD_DISP_TOUCH_LS_IN_MAX77696) {
+				if(buf[1] == '1') {
+					if(!regulator_is_enabled(cd->vdda))
+						regulator_enable(cd->vdda);
+				}else {
+					if(regulator_is_enabled(cd->vdda))
+						regulator_disable(cd->vdda);
+				}
+			} else {
+				gpio_touch_switch_power_3v2(buf[1] == '1');
+			}
 			printk(KERN_ERR "3v2 switch!!%d", buf[1] == '1');
 			return size;
 		break;
@@ -2731,7 +2800,7 @@ static ssize_t cyttsp4_hw_reset_store(struct device *dev,
 		dev_err(dev, "%s: HW reset failed r=%d\n",
 			__func__, rc);
 			
-	if(TOUCH_HAS_LOAD_SWITCHES)
+	if(TOUCH_HAS_LOAD_SWITCHES && !recovery_mode)
 		cyttsp4_start_wd_timer(cd);
 
 	return size;
@@ -3197,9 +3266,20 @@ static int cyttsp4_core_probe(struct cyttsp4_core *core)
 	init_waitqueue_head(&cd->wait_q);
 	init_waitqueue_head(&cd->sleep_q);
 
-	if(TOUCH_HAS_LOAD_SWITCHES || 
-		lab126_board_is(BOARD_ID_MUSCAT_WFO_TOUCH_LS) || 
-		lab126_board_is(BOARD_ID_MUSCAT_WAN_TOUCH_LS)) {
+	if(CONFIG_BOARD_DISP_TOUCH_LS_IN_MAX77696) {
+		cd->vddd = regulator_get(NULL, "TOUCH_VDDD");
+		if(!cd->vddd)
+			dev_err(dev, "expected regulator TOUCH_VDDD but return null\n");
+		cd->vdda = regulator_get(NULL, "TOUCH_VDDA");
+		if(!cd->vdda)
+			dev_err(dev, "expected regulator TOUCH_VDDA but return null\n");
+		
+		if(cd->vdda && cd->vddd) {
+			regulator_enable(cd->vdda);
+			regulator_enable(cd->vddd);
+		}
+	}
+	else if(TOUCH_HAS_LOAD_SWITCHES ) {
 		gpio_init_touch_switch_power();
 	}
 	dev_dbg(dev, "%s: initialize core data\n", __func__);
@@ -3210,6 +3290,8 @@ static int cyttsp4_core_probe(struct cyttsp4_core *core)
 	cd->pdata = pdata;
 	cd->irq = gpio_to_irq(pdata->irq_gpio);
 	cd->irq_enabled = true;
+	
+	
 	dev_set_drvdata(dev, cd);
 	if (cd->irq < 0) {
 		rc = -EINVAL;
@@ -3300,7 +3382,8 @@ static int cyttsp4_core_probe(struct cyttsp4_core *core)
 		INIT_WORK(&cd->watchdog_work, cyttsp4_watchdog_work);
 		setup_timer(&cd->watchdog_timer, cyttsp4_watchdog_timer,
 			(unsigned long)cd);
-		cyttsp4_start_wd_timer(cd);
+		if(!recovery_mode)
+			cyttsp4_start_wd_timer(cd);
 		cd->wd_timer_started = true;
 	}
 
@@ -3357,6 +3440,12 @@ static int cyttsp4_core_release(struct cyttsp4_core *core)
 	dev_set_drvdata(dev, NULL);
 	cyttsp4_free_si_ptrs(cd);
 	misc_deregister(&cyttsp4_misc_device);
+	
+	if(CONFIG_BOARD_DISP_TOUCH_LS_IN_MAX77696) {
+		regulator_put(cd->vddd);
+		regulator_put(cd->vdda);
+	}
+	
 	kfree(cd);
 	return 0;
 }

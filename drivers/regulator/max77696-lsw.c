@@ -210,9 +210,11 @@ static int max77696_lsw_vreg_probe (struct platform_device *pdev)
     struct max77696_lsw *me = platform_get_drvdata(pdev);
     struct max77696_lsw_vreg *vreg = &(me->vreg[pdev->id]);
     struct max77696_lsw_vreg_desc *desc = VREG_DESC(pdev->id);
-    struct regulator_init_data *init_data = dev_get_platdata(&(pdev->dev));
+    struct max77696_lsw_platform_data *pdata = dev_get_platdata(&(pdev->dev));
+    struct regulator_init_data *init_data = pdata->init_data;
     struct regulator_dev *rdev;
     int rc;
+    u8 val, ade, addr, mask;
 
     /* Save my descriptor */
     vreg->desc = desc;
@@ -230,6 +232,21 @@ static int max77696_lsw_vreg_probe (struct platform_device *pdev)
 
     vreg->rdev = rdev;
     platform_set_drvdata(pdev, rdev);
+
+
+    // initialize active discharge enable
+    BUG_ON(!init_data->driver_data);
+    ade = *(u8*)init_data->driver_data;
+
+    addr = desc->cntrl_reg;
+
+    mask = LSW_REG_BITMASK(SW_CNTRL, LSADE);
+    val  = ade ? 0xFF : 0x00;
+
+    rc = max77696_write_masked(me->i2c, addr, mask, val);
+    if (unlikely(rc)) {
+        dev_err(me->dev, "SW_CNTRL write error [%d]\n", rc);
+    }
 
     return 0;
 
@@ -323,9 +340,10 @@ static void max77696_lsw_unregister_vreg (struct max77696_lsw *me)
 }
 
 static int max77696_lsw_register_vreg (struct max77696_lsw *me,
-    struct regulator_init_data init_data[LSW_NREG])
+    struct max77696_lsw_platform_data *pdata)
 {
     int i, rc;
+    struct regulator_init_data* init_data = pdata->init_data;
 
     rc = max77696_lsw_register_vreg_drv(me);
     if (unlikely(rc)) {
@@ -334,10 +352,12 @@ static int max77696_lsw_register_vreg (struct max77696_lsw *me,
         goto out;
     }
 
-    for (i = 0; i < LSW_NREG; i++) {
+    for (i = 0; i < LSW_NREG; i++, init_data++) {
         dev_verbose(me->dev, "registering vreg dev for %s.%d ...\n",
             LSW_VREG_NAME, i);
-        rc = max77696_lsw_register_vreg_dev(me, i, &(init_data[i]));
+
+	init_data->driver_data = &pdata->ade[i];
+        rc = max77696_lsw_register_vreg_dev(me, i, init_data);
         if (unlikely(rc)) {
             dev_err(me->dev, "failed to register vreg dev for %s.%d [%d]\n",
                 LSW_VREG_NAME, i, rc);
@@ -373,9 +393,9 @@ static __devinit int max77696_lsw_probe (struct platform_device *pdev)
     me->chip = chip;
     me->i2c  = __get_i2c(chip);
     me->dev  = &(pdev->dev);
-
+    
     /* Register load switches driver & device */
-    rc = max77696_lsw_register_vreg(me, pdata->init_data);
+    rc = max77696_lsw_register_vreg(me, pdata);
     if (unlikely(rc)) {
         goto out_err_reg_vregs;
     }

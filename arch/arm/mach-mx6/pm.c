@@ -40,6 +40,9 @@
 #include "src-reg.h"
 #include "regs-anadig.h"
 
+#define GPIO_BANK_SIZE				0x4000
+#define GPIO_IMR_OFFSET				0x14
+#define GPIO_ISR_OFFSET				0x18
 #define SCU_CTRL_OFFSET				0x00
 #define GPC_IMR1_OFFSET				0x08
 #define GPC_IMR2_OFFSET				0x0c
@@ -116,7 +119,7 @@ void *suspend_iram_base;
 unsigned long suspend_iram_phys_addr;
 
 #if defined (CONFIG_MACH_MX6SL_WARIO)
-extern void gpio_wifi_power_enable(int);
+extern void gpio_wifi_power_reset(void);
 #endif
 
 /*
@@ -282,6 +285,36 @@ static void mx6_suspend_restore(void)
 	__raw_writel(ccm_anadig_ana_misc2, MXC_PLL_BASE + HW_ANADIG_ANA_MISC2);
 }
 
+static inline void print_wake_irq (void) {
+	unsigned int wake_irq_isr[4];
+	void __iomem *gpio_base = IO_ADDRESS(GPIO1_BASE_ADDR);
+	int i=0;
+	int mask = 0xC; // GPIO1 starts at irq 98: wake_irq_isr[2] bit 2 and 3
+
+	wake_irq_isr[0] = __raw_readl(gpc_base +
+			GPC_ISR1_OFFSET) & gpc_wake_irq[0];
+	wake_irq_isr[1] = __raw_readl(gpc_base +
+			GPC_ISR2_OFFSET) & gpc_wake_irq[1];
+	wake_irq_isr[2] = __raw_readl(gpc_base +
+			GPC_ISR3_OFFSET) & gpc_wake_irq[2];
+	wake_irq_isr[3] = __raw_readl(gpc_base +
+			GPC_ISR4_OFFSET) & gpc_wake_irq[3];
+	printk(KERN_INFO "triggered: wake_irq_isr[0-3]: 0x%x, 0x%x, 0x%x, 0x%x\n",
+			wake_irq_isr[0], wake_irq_isr[1],
+			wake_irq_isr[2], wake_irq_isr[3]);
+
+	// if gpio interrupts are indicated, break out which pins triggered
+	for (i=0; i<5; i++) {
+		if (wake_irq_isr[2] & (mask<<2*i)) {
+			u32 gpio_int_mask = __raw_readl(gpio_base + GPIO_BANK_SIZE*i + GPIO_IMR_OFFSET);
+			u32 gpio_int_status = __raw_readl(gpio_base + GPIO_BANK_SIZE*i + GPIO_ISR_OFFSET);
+			u32 triggered = gpio_int_status & gpio_int_mask;
+			printk(KERN_INFO "gpio%d triggered 0x%x (0x%x/0x%x)\n",
+					i+1, triggered, gpio_int_status, gpio_int_mask);
+		}
+	}
+}
+
 static int mx6_suspend_enter(suspend_state_t state)
 {
 	unsigned int wake_irq_isr[4];
@@ -316,10 +349,7 @@ static int mx6_suspend_enter(suspend_state_t state)
 		   pending interrupt scenario causing bail out 
 		   from entering suspend */
 		if (state == PM_SUSPEND_MEM || state == PM_SUSPEND_STANDBY) {
-			gpio_wifi_power_enable(0);
-			/* 20ms  delay is provided by Qc */
-			mdelay(20);
-			gpio_wifi_power_enable(1);
+			gpio_wifi_power_reset();
                 }
 #endif
 		return 0;
@@ -389,6 +419,9 @@ static int mx6_suspend_enter(suspend_state_t state)
 		__raw_writel(0xffffffff, gpc_base + 0x0c);
 		__raw_writel(0xffffffff, gpc_base + 0x10);
 		__raw_writel(0xffffffff, gpc_base + 0x14);
+
+		// for debugging issues waking up prematurely from suspend
+		print_wake_irq();
 
 		/* Clear the RBC counter and RBC_EN bit. */
 		/* Disable the REG_BYPASS_COUNTER. */
@@ -515,7 +548,7 @@ static int __init pm_init(void)
 	suspend_iram_phys_addr = MX6_SUSPEND_IRAM_CODE;
 
 	/* Dont ioremap the address, we have fixed the IRAM address at IRAM_BASE_ADDR_VIRT */
-	suspend_iram_base = IRAM_BASE_ADDR_VIRT + (suspend_iram_phys_addr - IRAM_BASE_ADDR);
+	suspend_iram_base = (void*)(IRAM_BASE_ADDR_VIRT + (suspend_iram_phys_addr - IRAM_BASE_ADDR));
 
 	pr_info("cpaddr = %x suspend_iram_base=%x\n",
 		(unsigned int)cpaddr, (unsigned int)suspend_iram_base);

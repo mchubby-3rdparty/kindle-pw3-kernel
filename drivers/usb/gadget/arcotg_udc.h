@@ -625,6 +625,8 @@ struct fsl_udc {
 	void *iram_buffer_v[IRAM_PPH_NTD];
 	struct work_struct gadget_disconnect_schedule;
 	struct usb_charger charger; /* usb charger for this udc */
+	u8 otg_is_active;
+	u8 first_resume;
 };
 
 /*-------------------------------------------------------------------------*/

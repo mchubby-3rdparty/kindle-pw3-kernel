@@ -171,13 +171,13 @@ static __inline int max77696_adc_cnfgadc_write(struct max77696_adc *me, u8 sel)
     int rc;
 
     if(sel >= 50) {
-        tmp = 0x03;    	
+        tmp = 0x03;
     } else if(sel >= 10) {
-	tmp = 0x02;    
+	tmp = 0x02;
     } else if(sel >= 5) {
-	tmp = 0x01;    
+	tmp = 0x01;
     } else {
-	tmp = 0x0;    
+	tmp = 0x0;
     }
 
     rc = max77696_adc_reg_set_bit(me, ADCICNFG, IADC, tmp);
@@ -216,7 +216,7 @@ static ssize_t max77696_adc_adcavg_show (struct device *dev,
 {
     struct platform_device *pdev = to_platform_device(dev);
     struct max77696_adc *me = platform_get_drvdata(pdev);
-    u8 val;
+    u8 val = 0;
     int rc;
 
     __lock(me);
@@ -319,12 +319,12 @@ static DEVICE_ATTR(display_temp_c, S_IWUSR | S_IRUGO,
 #define max77696_adc_channel_release_null NULL
 
 /* LAB126: Commented out IMON Buck and LDO setup in below functions
- * We dont need to enable them unless we implement current monitoring 
+ * We dont need to enable them unless we implement current monitoring
  * if any, in future */
 static int max77696_adc_channel_setup_imon_buck (struct max77696_adc *me,
     u8 channel)
 {
-#if 0	
+#if 0
     u8 buck = (u8)(channel - MAX77696_ADC_CH_IMONB1);
     return max77696_buck_set_imon_enable(buck, 1);
 #endif
@@ -334,7 +334,7 @@ static int max77696_adc_channel_setup_imon_buck (struct max77696_adc *me,
 static int max77696_adc_channel_release_imon_buck (struct max77696_adc *me,
     u8 channel)
 {
-#if 0	    
+#if 0
     u8 buck = (u8)(channel - MAX77696_ADC_CH_IMONB1);
     return max77696_buck_set_imon_enable(buck, 0);
 #endif
@@ -404,7 +404,7 @@ static struct max77696_adc_channel max77696_adc_channels[ADC_NR_CHANNELS] =
     ADC_CHANNEL(AIN3,   13, ain_mux  ),
 };
 
-static int max77696_adc_channel_setup_ain_mux(struct max77696_adc *me, 
+static int max77696_adc_channel_setup_ain_mux(struct max77696_adc *me,
     u8 channel)
 {
     u8 tmp = 0x0, adc_ch;
@@ -433,7 +433,7 @@ static int max77696_adc_channel_setup_ain_mux(struct max77696_adc *me,
         dev_err(me->dev, "ADCSEL0 write error [%d]\n", rc);
         goto out;
     }
-	
+
     /*setup ADC Mux */
     switch(channel) {
 	case MAX77696_ADC_CH_AIN0:
@@ -554,7 +554,7 @@ static int max77696_adc_channel_convert (struct max77696_adc *me,
         dev_err(me->dev, "ADCCHSEL write failed [%d]\n", rc);
         goto out;
     }
-    
+
     max77696_read(me->i2c, 0x2A, &tmp);
 
     rc = max77696_adc_reg_read(me, ADCDATAH, &tmp);
@@ -570,9 +570,9 @@ static int max77696_adc_channel_convert (struct max77696_adc *me,
         dev_err(me->dev, "ADCDATAL read failed [%d]\n", rc);
         goto out;
     }
-    
+
     val = (val | tmp);
-    
+
     *data = val;
 
     /* Release ADC channel after conversion */
@@ -731,7 +731,7 @@ static __devinit int max77696_adc_probe (struct platform_device *pdev)
 
     BUG_ON(chip->adc_ptr);
     chip->adc_ptr = me;
- 
+
     /* Set defaults given via platform data */
     max77696_adc_adcavg_write(me, pdata->avg_rate);
     max77696_adc_adcdly_write(me, pdata->adc_delay);
@@ -798,9 +798,9 @@ static int max77696_adc_resume (struct device *dev)
     struct platform_device *pdev = to_platform_device(dev);
     struct max77696_adc_platform_data *pdata = dev_get_platdata(&(pdev->dev));
     struct max77696_adc *me = platform_get_drvdata(pdev);
-   
+
     __lock(me);
-    
+
     /* write back platform values */
     max77696_adc_adcavg_write(me, pdata->avg_rate);
     max77696_adc_cnfgadc_write(me, pdata->current_src);
@@ -882,7 +882,7 @@ out:
 EXPORT_SYMBOL(max77696_adc_read);
 
 /************************************************************************
- * ADC SOURCE DRIVER 
+ * ADC SOURCE DRIVER
  ************************************************************************/
 
 /********** NTC Display temperature *************************************/
@@ -988,7 +988,6 @@ static struct lkup_data ntc_lkup[TEMP_RANGE] = {
 {-8,0x6B3},
 {-9,0x6E1},
 {-10,0x710},
-
 };
 
 /********************* internal functions *******************************/
@@ -1020,7 +1019,7 @@ static int lkup_temp_data(int data)
 	    start = mid;
     else
 	    return ntc_lkup[mid].temp;
-    
+
     if(abs(end-start) <=1) {
         // floor is 'end' idx temp since its descending in lkup
 	return ntc_lkup[end].temp;
@@ -1035,7 +1034,7 @@ static int lkup_temp_data(int data)
 static void adc_disp_gettemp_work(struct work_struct *work)
 {
     u16 data = 0x0;
-    
+
     max77696_adc_read(MAX77696_ADC_CH_AIN0, &data);
 
     /* Remove ADC grnd ref noise in boards with analog grnd island */
@@ -1051,8 +1050,11 @@ static void adc_disp_gettemp_work(struct work_struct *work)
 	lab126_board_is(BOARD_ID_MUSCAT_WAN) ||
 	lab126_board_is(BOARD_ID_MUSCAT_WFO) ||
 	lab126_board_is(BOARD_ID_BOURBON_WFO) ||
-        lab126_board_is(BOARD_ID_BOURBON_WFO_PREEVT2)) {
-	    u16 noise = 0x0;
+        lab126_board_is(BOARD_ID_BOURBON_WFO_PREEVT2) ||
+	lab126_board_is(BOARD_ID_WHISKY_WFO) ||
+	lab126_board_is(BOARD_ID_WHISKY_WAN) ||
+	lab126_board_is(BOARD_ID_WOODY)) { 
+            u16 noise = 0x0;
             max77696_adc_read(MAX77696_ADC_CH_AIN2, &noise);
             /* diff to compensate */
             data = abs(data - noise);

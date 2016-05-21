@@ -111,7 +111,8 @@ static int sdio_read_cccr(struct mmc_card *card)
 
 	cccr_vsn = data & 0x0f;
 
-	if (cccr_vsn > SDIO_CCCR_REV_1_20) {
+	/* brcm 4343w return CCCR/FBR version 3.00 */
+	if (cccr_vsn > SDIO_CCCR_REV_3_00) {
 		printk(KERN_ERR "%s: unrecognised CCCR structure version %d\n",
 			mmc_hostname(card->host), cccr_vsn);
 		return -EINVAL;
@@ -573,8 +574,14 @@ static void mmc_sdio_detect(struct mmc_host *host)
 	/*
 	 * Just check if our card has been removed.
 	 */
-	err = mmc_select_card(host->card);
 
+	err = mmc_select_card(host->card);
+#if defined(CONFIG_MX6SL_WARIO_WOODY)
+	/* Work around for brcm 4343w wifi suspend/resume, timing issue that during resume need to re-try card detect */
+	/* JIRA: https://issues.labcollab.net/browse/JSEVEN-105 */
+	if (err)
+		err = mmc_select_card(host->card);
+#endif
 	mmc_release_host(host);
 
 	/*

@@ -158,6 +158,9 @@ struct tag_macaddr {
 struct tag_bootmode {
    u8 boot[16];
    u8 post[16];
+#ifdef CONFIG_FALCON 
+   u8 oldboot[16];
+#endif
 };
 
 /* LPDDR2 vendor ID */
@@ -166,6 +169,22 @@ struct tag_bootmode {
 struct tag_ddrmfgid {
    __u32 mfgid;
 };
+
+/* bluetooth mac address */
+#define ATAG_BTMACADDR  0x54410011
+
+struct tag_btmacaddr {
+    u8 address[12];
+};
+
+#ifdef CONFIG_FALCON
+/* Quickboot info */
+#define ATAG_QBOOT	0x54410012
+
+struct tag_qboot {
+    u8 qbcount[10];
+};
+#endif
 
 #endif
 
@@ -204,6 +223,10 @@ struct tag {
 		struct tag_macaddr macaddr;
 		struct tag_bootmode bootmode;
 		struct tag_ddrmfgid ddrmfgid;
+		struct tag_btmacaddr btmacaddr;
+#ifdef CONFIG_FALCON
+		struct tag_qboot qboot;
+#endif
 #endif
 		/*
 		 * Acorn specific

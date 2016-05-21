@@ -36,6 +36,10 @@
 #define DRIVER_NAME    MAX77696_TOPSYS_NAME
 #define DRIVER_VERSION MAX77696_DRIVER_VERSION".0"
 
+#ifdef CONFIG_FALCON
+extern int in_falcon(void);
+#endif
+
 #define __get_i2c(chip)                  (&((chip)->pmic_i2c))
 #define __lock(me)                       mutex_lock(&((me)->lock))
 #define __unlock(me)                     mutex_unlock(&((me)->lock))
@@ -89,6 +93,7 @@ struct max77696_topsys {
 
 static pmic_event_callback_t sw_partialrstrt;
 static pmic_event_callback_t sw_fullshtdwn;
+static pmic_event_callback_t sw_factoryship;
 
 int max77696_topsys_glbl_mask(void *obj, u16 event, bool mask_f)
 {
@@ -147,6 +152,11 @@ static struct max77696_event_handler max77696_sw_partialrstrt_hdl = {
 static struct max77696_event_handler max77696_sw_fullshtdwn_hdl = {
 	.mask_irq = NULL,
 	.event_id = EVENT_SW_FULLSHUTDWN,
+};
+
+static struct max77696_event_handler max77696_sw_factoryship_hdl = {
+	.mask_irq = NULL,
+	.event_id = EVENT_SW_FACTORYSHIP,
 };
 
 #if 0
@@ -280,6 +290,11 @@ static irqreturn_t max77696_topsys_isr (int irq, void *data)
 #if 0 
 	pr_info("GLBLINT_REG %02X\n", interrupted);
 #endif 
+#if defined(CONFIG_FALCON)
+	if(in_falcon()){
+		printk(KERN_DEBUG "GLBLINT_REG %02X\n", interrupted);
+	}
+#endif
 
 	for (i = 0; i < NR_TOPSYS_IRQ; i++) {
 		u8 irq_bit = (1 << (i + 1));
@@ -313,12 +328,28 @@ static void sw_fullshutdown_cb(void *obj, void *param)
 	struct max77696_topsys *me = (struct max77696_topsys *)obj;
 
 	max77696_write(me->i2c, GLBLCNFG0_REG, 0);
+	/* Note: SFTPDDR is set to 0 to not reset PMIC registers during full-shutdown
+	 *       this is the only way to retain PMIC GPIO state during full-shutdown.
+	 */
+	max77696_write(me->i2c, GLBLCNFG0_REG, GLBLCNFG0_FSHDN);
+}
+
+static void sw_factoryship_cb(void *obj, void *param)
+{
+	struct max77696_topsys *me = (struct max77696_topsys *)obj;
+
+	max77696_write(me->i2c, GLBLCNFG0_REG, 0);
 	max77696_write(me->i2c, GLBLCNFG0_REG, GLBLCNFG0_FSENT | GLBLCNFG0_SFTPDRR);
 }
 
 void max77696_chip_poweroff(void)
 {
-	pmic_event_callback(EVENT_SW_FULLSHUTDWN);
+	pmic_event_callback(EVENT_SW_FACTORYSHIP);
+}
+
+void max77696_chip_hibernate(void)
+{
+	pmic_event_callback(EVENT_SW_FULLSHUTDWN);	
 }
 
 void max77696_chip_restart(char mode, const char *cmd)
@@ -352,6 +383,7 @@ int max77696_topsys_init (struct max77696_chip *chip,
 	/* Set PMIC power off */
 	pm_power_off = max77696_chip_poweroff;
 	pm_restart = max77696_chip_restart;
+	pm_power_hibernate = max77696_chip_hibernate;
 
 	/* Set STBY enable */
 	max77696_topsys_reg_write_masked(me, GLBLCNFG1, GLBLCNFG1_STBYEN_MASK, 1);
@@ -432,6 +464,13 @@ int max77696_topsys_init (struct max77696_chip *chip,
 		goto out_err_reg_sw_fullshtdwn;
 	}
 
+	rc = max77696_eventhandler_register(&max77696_sw_factoryship_hdl, me);
+	if (unlikely(rc)) {
+		dev_err(me->dev, "failed to register event[%d] handle with err [%d]\n", \
+			max77696_sw_factoryship_hdl.event_id, rc);
+		goto out_err_reg_sw_fship;
+	}
+
 	sw_partialrstrt.param = me;
 	sw_partialrstrt.func = sw_partialrestart_cb;
 	rc = pmic_event_subscribe(max77696_sw_partialrstrt_hdl.event_id, &sw_partialrstrt);
@@ -450,12 +489,25 @@ int max77696_topsys_init (struct max77696_chip *chip,
 		goto out_err_subscribe_shutdown;
 	}
 
+	sw_factoryship.param = me;
+	sw_factoryship.func = sw_factoryship_cb;
+	rc = pmic_event_subscribe(max77696_sw_factoryship_hdl.event_id, &sw_factoryship);
+	if (unlikely(rc)) {
+		dev_err(me->dev, "failed to register event[%d] handle with err [%d]\n", \
+			max77696_sw_factoryship_hdl.event_id, rc);
+		goto out_err_subscribe_fship;
+	}
+
 	pr_info(DRIVER_DESC" "DRIVER_VERSION" Installed\n");
 	return 0;
 
+out_err_subscribe_fship:
+	pmic_event_unsubscribe(max77696_sw_fullshtdwn_hdl.event_id, &sw_fullshtdwn);
 out_err_subscribe_shutdown:
 	pmic_event_unsubscribe(max77696_sw_partialrstrt_hdl.event_id, &sw_partialrstrt);
 out_err_subscribe_restart:
+	max77696_eventhandler_unregister(&max77696_sw_factoryship_hdl);
+out_err_reg_sw_fship:
 	max77696_eventhandler_unregister(&max77696_sw_fullshtdwn_hdl);
 out_err_reg_sw_fullshtdwn:
 	max77696_eventhandler_unregister(&max77696_sw_partialrstrt_hdl);

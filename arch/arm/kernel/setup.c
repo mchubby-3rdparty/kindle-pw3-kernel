@@ -124,8 +124,19 @@ EXPORT_SYMBOL(system_mac_addr);
 unsigned char system_mac_sec[MAC_SEC_SIZE];
 EXPORT_SYMBOL(system_mac_sec);
 
+unsigned char system_btmac_addr[MAC_ADDR_SIZE];
+EXPORT_SYMBOL(system_btmac_addr);
+
 unsigned int ddr_mfgid;
 EXPORT_SYMBOL(ddr_mfgid);
+
+#ifdef CONFIG_FALCON
+unsigned char system_oldboot[BOOTMODE_SIZE];
+EXPORT_SYMBOL(system_oldboot);
+
+unsigned char system_qbcount[QBCOUNT_SIZE];
+EXPORT_SYMBOL(system_qbcount);
+#endif
 #endif
 
 
@@ -725,10 +736,21 @@ static int __init parse_tag_mac(const struct tag *tag)
 
 __tagtable(ATAG_MACADDR, parse_tag_mac);
 
+static int __init parse_tag_btmac(const struct tag *tag)
+{
+	memcpy(system_btmac_addr, tag->u.btmacaddr.address, MAC_ADDR_SIZE);
+	return 0;
+}
+
+__tagtable(ATAG_BTMACADDR, parse_tag_btmac);
+
 static int __init parse_tag_bootmode(const struct tag *tag)
 {
 	memcpy(system_bootmode, tag->u.bootmode.boot, BOOTMODE_SIZE);
 	memcpy(system_postmode, tag->u.bootmode.post, BOOTMODE_SIZE);
+#ifdef CONFIG_FALCON
+	memcpy(system_oldboot, tag->u.bootmode.oldboot, BOOTMODE_SIZE);
+#endif
 	return 0;
 }
 
@@ -742,6 +764,15 @@ static int __init parse_tag_ddrmfgid(const struct tag *tag)
 
 __tagtable(ATAG_DDRMFGID, parse_tag_ddrmfgid);
 
+#ifdef CONFIG_FALCON
+static int __init parse_tag_qboot(const struct tag *tag)
+{
+	memcpy(system_qbcount, tag->u.qboot.qbcount, QBCOUNT_SIZE);
+	return 0;
+}
+
+__tagtable(ATAG_QBOOT, parse_tag_qboot);
+#endif
 #endif
 
 static int __init parse_tag_cmdline(const struct tag *tag)

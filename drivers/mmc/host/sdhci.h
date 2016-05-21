@@ -286,6 +286,15 @@ struct sdhci_ops {
 #endif /* CONFIG_LAB126 */
 };
 
+#ifdef CONFIG_LAB126
+#if defined(CONFIG_MX6SL_WARIO_BASE)
+extern void gpio_wifi_power_enable(int enable);
+#endif
+#if defined(CONFIG_MX6SL_WARIO_WOODY)
+extern void brcm_gpio_wifi_power_enable(int enable);
+#endif
+#endif
+
 #ifdef CONFIG_MMC_SDHCI_IO_ACCESSORS
 
 static inline void sdhci_writel(struct sdhci_host *host, u32 val, int reg)

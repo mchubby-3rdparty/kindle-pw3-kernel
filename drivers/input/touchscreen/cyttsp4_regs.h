@@ -72,6 +72,9 @@
 /* Verify Config Block CRC */
 #define CY_CMD_CAT_VERIFY_CFG_BLK_CRC_CMD_SZ	2
 #define CY_CMD_CAT_VERIFY_CFG_BLK_CRC_RET_SZ	5
+/* Retrieve Data Structure */
+#define CY_CMD_CAT_RETRIEVE_DATA_STRUCT_CMD_SZ  6
+#define CY_CMD_CAT_RETRIEVE_DATA_STRUCT_RET_SZ  5 /* + Data */
 #define HI_BYTE(x)                  (u8)(((x) >> 8) & 0xFF)
 #define LO_BYTE(x)                  (u8)((x) & 0xFF)
 
@@ -87,6 +90,14 @@
 #define CY_REG_CAT_CMD              2
 #define CY_CMD_COMPLETE_MASK        (1 << 6)
 #define CY_CMD_MASK                 0x3F
+
+
+/* Operational Mode Command Sizes */
+/* Run Opens Self-Test */
+#define CY_CMD_CAT_RUN_OPENS_ST_CMD_SZ          3
+#define CY_CMD_CAT_RUN_OPENS_ST_RET_SZ          3
+#define CY_CMD_CAT_GET_OPENS_ST_RES_CMD_SZ	6
+#define CY_CMD_CAT_GET_OPENS_ST_RES_RET_SZ	5 /* + Data */
 
 enum cyttsp4_ic_ebid {
 	CY_TCH_PARM_EBID,
@@ -182,6 +193,12 @@ enum cy_cali_mode {
  CY_CALI_SHOW_IDAC_ONLY = 42,
 };
 
+enum cyttsp4_retrieve_data_structure_data_id {
+        CY_RDS_DATAID_MUTCAP_SCAN,
+        CY_RDS_DATAID_SELFCAP_SCAN,
+        CY_RDS_DATAID_BUTTON_SCAN = 3,
+};
+
 #define CY_CMD_OP_NULL_CMD_SZ	1
 #define CY_CMD_OP_NULL_RET_SZ	0
 #define CY_CMD_OP_GET_CRC_CMD_SZ	2
@@ -191,6 +208,9 @@ enum cy_cali_mode {
 #define CY_CMD_OP_GET_PARAM_RET_SZ	6
 #define CY_CMD_OP_SET_PARAM_CMD_SZ	7
 #define CY_CMD_OP_SET_PARAM_RET_SZ	2
+
+#define CY_CMD_OP_GET_NOISE_METRIC_CMD_SZ 1
+#define CY_CMD_OP_GET_NOISE_METRIC_RET_SZ 6
 
 enum cyttsp4_op_param{
 		CY_OP_PARAM_ACT_DIS       = 0x4A, // touch point distance before reporting new
@@ -573,5 +593,31 @@ struct cyttsp4_sysinfo {
 extern unsigned long long timeofday_microsec(void);
 extern void wario_debug_toggle(int);
 #endif
+
+enum cyttsp4_self_test_id {
+        CY_ST_ID_NULL,
+        CY_ST_ID_BIST,
+        CY_ST_ID_SHORTS,
+        CY_ST_ID_OPENS,
+        CY_ST_ID_AUTOSHORTS,
+};
+
+enum cyttsp4_self_test_result {
+        CY_ST_RESULT_PASS,
+        CY_ST_RESULT_FAIL,
+        CY_ST_RESULT_HOST_MUST_INTERPRET = 0xFF,
+};
+
+enum cyttsp4_calibrate_idacs_sensing_mode {
+        CY_CI_SM_MUTCAP_FINE,
+        CY_CI_SM_MUTCAP_BUTTON,
+        CY_CI_SM_SELFCAP,
+};
+
+/* Calibrate IDACs */
+#define CY_CMD_CAT_CALIBRATE_IDAC_CMD_SZ        2
+#define CY_CMD_CAT_CALIBRATE_IDAC_RET_SZ        1
+
+#define CY_CALIBRATE_COMPLETE_TIMEOUT           10000
 
 #endif /* _CYTTSP4_REGS_H */

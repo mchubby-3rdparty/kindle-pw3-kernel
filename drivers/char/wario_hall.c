@@ -35,6 +35,8 @@
 #include <asm/irq.h>
 #include <asm/mach-types.h>
 #include <mach/clock.h>
+#include <mach/boardid.h>
+#include <linux/mfd/max77696.h>
 
 #define HALL_DEV_MINOR      163
 #define HALL_DRIVER_NAME    "wario_hall"
@@ -46,6 +48,9 @@
 #define STATE_OPENED        0
 #define STATE_CLOSED        1
 
+#define HALL_CTRL_DISABLE   0
+#define HALL_CTRL_ENABLE    1
+
 struct hall_drvdata {
 	struct hall_platform_data* pdata;
 	int (*enable)(struct device *dev);
@@ -55,6 +60,10 @@ struct hall_drvdata {
 extern int gpio_hallsensor_detect(void);
 extern int gpio_hallsensor_irq(void);
 extern void gpio_hallsensor_pullup(int);
+#if defined(CONFIG_MX6SL_WARIO_WOODY)
+extern void gpio_hall_oneshot_init(void);
+extern void gpio_hall_oneshot_ctrl(int);
+#endif
 extern int wario_onkey_down_ctrl(int);
 
 static int hall_dbg = 0;
@@ -63,6 +72,7 @@ static int hall_event = 0;			/* track hall events (open / close) */
 static int hall_pullup_enabled = 0;	/* default=0 to be enabled only for VNI tests */
 static int hall_close_delay = 0;	/* delay to avoid multiple transitions within short duration */
 static int current_state = 0;		/* OPEN=0, CLOSE=1 */
+static int hall_enabled = HALL_CTRL_ENABLE;	/* Enable Hall control by default */
 
 static void hall_close_event_work_handler(struct work_struct *);
 static DECLARE_DELAYED_WORK(hall_close_event_work, hall_close_event_work_handler);
@@ -72,6 +82,25 @@ static DECLARE_DELAYED_WORK(hall_open_event_work, hall_open_event_work_handler);
 
 static void hall_init_work_handler(struct work_struct *);
 static DECLARE_DELAYED_WORK(hall_init_work, hall_init_work_handler);
+
+extern int pb_oneshot;
+extern void pb_oneshot_unblock_button_events (void);
+
+static void hall_init_state(void)
+{
+	if(hall_enabled) {						/* HALL CTRL ENABLED */
+		if(gpio_hallsensor_detect()) {
+			wario_onkey_down_ctrl(0);	
+			current_state = STATE_CLOSED;	/* COVER CLOSE */
+		} else {
+			wario_onkey_down_ctrl(1);	
+			current_state = STATE_OPENED;	/* COVER OPEN */
+		}
+	} else {								/* HALL CTRL DISABLED */
+		wario_onkey_down_ctrl(1);
+	}
+	return;
+}
 
 static long hall_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
@@ -167,6 +196,49 @@ static ssize_t hall_detect_show(struct sys_device *dev, struct sysdev_attribute 
 }
 static SYSDEV_ATTR(hall_detect, 0444, hall_detect_show, NULL);
 
+static ssize_t hall_enable_store(struct sys_device *dev, struct sysdev_attribute *attr, const char *buf, size_t size)
+{
+	int value = 0;
+	if (sscanf(buf, "%d", &value) <= 0) {
+		printk(KERN_ERR "Could not update hall enable ctrl \n");
+		return -EINVAL;
+	}
+
+	if (value > 0 && !hall_enabled) {
+		hall_enabled = HALL_CTRL_ENABLE;
+	} else if(value <= 0 && hall_enabled) {
+		hall_enabled = HALL_CTRL_DISABLE;
+	}
+	hall_init_state();
+
+	return size;
+}
+
+static ssize_t hall_enable_show(struct sys_device *dev, struct sysdev_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%d\n", hall_enabled);
+}
+static SYSDEV_ATTR(hall_enable, 0644, hall_enable_show, hall_enable_store);
+
+#if defined(CONFIG_MX6SL_WARIO_WOODY)
+static ssize_t hall_oneshot_store(struct sys_device *dev, struct sysdev_attribute *attr, const char *buf, size_t size)
+{
+	int value = 0;
+	if (sscanf(buf, "%d", &value) <= 0) {
+		printk(KERN_ERR "Could not update hall enable ctrl \n");
+		return -EINVAL;
+	}
+
+	if (value > 0) {
+		gpio_hall_oneshot_ctrl(1);
+	} else {
+		gpio_hall_oneshot_ctrl(0);
+	}
+	return size;
+}
+static SYSDEV_ATTR(hall_oneshot, 0644, NULL, hall_oneshot_store);
+#endif
+
 static struct sysdev_class wario_hall_sysclass = {
 	.name   = HALL_DRIVER_NAME,
 };
@@ -185,12 +257,14 @@ static void hall_send_close_event(void)
 
 static void hall_close_event_work_handler(struct work_struct *work)
 {
-	if(gpio_hallsensor_detect() && current_state == STATE_OPENED) {
-		wario_onkey_down_ctrl(0);	
-		hall_send_close_event();
-		if (hall_dbg) 
-			printk(KERN_INFO "KERNEL: I hall:closed::current_state=%d\n",current_state);
-	} 
+	if(hall_enabled) {
+		if(gpio_hallsensor_detect() && current_state == STATE_OPENED) {
+			wario_onkey_down_ctrl(0);	
+			hall_send_close_event();
+			if (hall_dbg) 
+				printk(KERN_INFO "KERNEL: I hall:closed::current_state=%d\n",current_state);
+		} 
+	}
 }
 
 static void hall_open_event_work_handler(struct work_struct *work)
@@ -205,35 +279,37 @@ static void hall_detwq_handler(struct work_struct *dummy)
 {
 	int irq = gpio_hallsensor_irq();
 
-	if(gpio_hallsensor_detect()) {
-		/* Hall - Close */
-		cancel_delayed_work_sync(&hall_open_event_work);
-		if (hall_close_delay) {
-			/*	Note: To avoid framework overload during back-to-back cover open-close events
-			 *	defer current close event when previous open event occured immiediately after close  
-			 */
-			schedule_delayed_work(&hall_close_event_work, msecs_to_jiffies(HALL_EVENT_DELAY));
-		} else { 
-			/* Hall debounce on a normal (cover close) scenario */
-			schedule_delayed_work(&hall_close_event_work, msecs_to_jiffies(HALL_EVENT_DEB));
-		}
-		if (hall_dbg) 
-			printk(KERN_INFO "KERNEL: I hall:close event::current_state=%d\n",current_state);
-	} else {
-		/* Hall - Open */
-		char *envp[] = {"HALLSENSOR=opened", NULL};
-		if (hall_dbg) 
-			printk(KERN_INFO "KERNEL: I hall:open event::current_state=%d\n",current_state);
-		cancel_delayed_work_sync(&hall_close_event_work);
-		if (current_state != STATE_OPENED) {
-			kobject_uevent_env(&hall_misc_device.this_device->kobj, KOBJ_OFFLINE, envp);
-			current_state = STATE_OPENED;
-			wario_onkey_down_ctrl(1);
+	if(hall_enabled) {
+		if(gpio_hallsensor_detect()) {
+			/* Hall - Close */
+			cancel_delayed_work_sync(&hall_open_event_work);
+			if (hall_close_delay) {
+				/*	Note: To avoid framework overload during back-to-back cover open-close events
+				 *	defer current close event when previous open event occured immiediately after close  
+				 */
+				schedule_delayed_work(&hall_close_event_work, msecs_to_jiffies(HALL_EVENT_DELAY));
+			} else { 
+				/* Hall debounce on a normal (cover close) scenario */
+				schedule_delayed_work(&hall_close_event_work, msecs_to_jiffies(HALL_EVENT_DEB));
+			}
 			if (hall_dbg) 
-				printk(KERN_INFO "KERNEL: I hall:opened::current_state=%d\n",current_state);
+				printk(KERN_INFO "KERNEL: I hall:close event::current_state=%d\n",current_state);
+		} else {
+			/* Hall - Open */
+			char *envp[] = {"HALLSENSOR=opened", NULL};
+			if (hall_dbg) 
+				printk(KERN_INFO "KERNEL: I hall:open event::current_state=%d\n",current_state);
+			cancel_delayed_work_sync(&hall_close_event_work);
+			if (current_state != STATE_OPENED) {
+				kobject_uevent_env(&hall_misc_device.this_device->kobj, KOBJ_OFFLINE, envp);
+				current_state = STATE_OPENED;
+				wario_onkey_down_ctrl(1);
+				if (hall_dbg) 
+					printk(KERN_INFO "KERNEL: I hall:opened::current_state=%d\n",current_state);
+			}
+			hall_close_delay = 1;
+			schedule_delayed_work(&hall_open_event_work, msecs_to_jiffies(HALL_EVENT_DELAY));
 		}
-		hall_close_delay = 1;
-		schedule_delayed_work(&hall_open_event_work, msecs_to_jiffies(HALL_EVENT_DELAY));
 	}
 	hall_event = 1;	
 	enable_irq(irq);
@@ -255,13 +331,7 @@ static irqreturn_t hall_isr(int irq, void *dev_id)
 static void hall_init_work_handler(struct work_struct *work)
 {
 	int irq = gpio_hallsensor_irq();
-
-	if(gpio_hallsensor_detect()) {
-		wario_onkey_down_ctrl(0);	
-		current_state = STATE_CLOSED;	/* COVER CLOSE */
-	} else {
-		current_state = STATE_OPENED;	/* COVER OPEN */
-	}
+	hall_init_state();
 	enable_irq_wake(irq);
 }
 
@@ -271,6 +341,20 @@ static int __devinit wario_hall_probe(struct platform_device *pdev)
 	int irq;
 	struct hall_drvdata* ddata;
 	struct hall_platform_data *pdata = pdev->dev.platform_data;
+
+#if defined(CONFIG_MX6SL_WARIO_WOODY)
+	/* Disable HALL (by default) for WhiskyHVT units */
+	if (lab126_board_rev_eq(BOARD_ID_WHISKY_WFO_HVT1) ||
+		lab126_board_rev_eq(BOARD_ID_WHISKY_WAN_HVT1)) {
+		hall_enabled = HALL_CTRL_DISABLE;
+	}
+
+	/* Disable Hall one-shot after boot */
+	if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+		lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+		gpio_hall_oneshot_init();
+	}
+#endif
 
 	ddata = kzalloc(sizeof(struct hall_drvdata) + sizeof(struct hall_drvdata),
 			GFP_KERNEL);
@@ -303,9 +387,13 @@ static int __devinit wario_hall_probe(struct platform_device *pdev)
 		error = sysdev_register(&wario_hall_device);
 	if (!error) {
 		error = sysdev_create_file(&wario_hall_device, &attr_hall_detect);
+		error = sysdev_create_file(&wario_hall_device, &attr_hall_enable);
 		error = sysdev_create_file(&wario_hall_device, &attr_hall_debug);
 		error = sysdev_create_file(&wario_hall_device, &attr_hall_trig_wkup);
 		error = sysdev_create_file(&wario_hall_device, &attr_hall_gpio_pullup);
+#if defined(CONFIG_MX6SL_WARIO_WOODY)
+		error = sysdev_create_file(&wario_hall_device, &attr_hall_oneshot);
+#endif
 	}
 
 	schedule_delayed_work(&hall_init_work, msecs_to_jiffies(HALL_INIT_DELAY));
@@ -326,9 +414,13 @@ static int __devexit wario_hall_remove(struct platform_device *pdev)
 	struct hall_platform_data *pdata = pdev->dev.platform_data;
 
 	sysdev_remove_file(&wario_hall_device, &attr_hall_detect);
+	sysdev_remove_file(&wario_hall_device, &attr_hall_enable);
 	sysdev_remove_file(&wario_hall_device, &attr_hall_debug);
 	sysdev_remove_file(&wario_hall_device, &attr_hall_trig_wkup);
 	sysdev_remove_file(&wario_hall_device, &attr_hall_gpio_pullup);
+#if defined(CONFIG_MX6SL_WARIO_WOODY)
+	sysdev_remove_file(&wario_hall_device, &attr_hall_oneshot);
+#endif
 	sysdev_unregister(&wario_hall_device);
 	sysdev_class_unregister(&wario_hall_sysclass);
 
@@ -353,7 +445,13 @@ static int wario_hall_suspend(struct platform_device *pdev, pm_message_t state)
 
 static int wario_hall_resume(struct platform_device *pdev)
 {
-	if (hall_event) { 
+	if (hall_event) {
+		if (hall_dbg)
+			printk(KERN_INFO "%s oneshot: %d\n", __func__, pb_oneshot);
+		if (pb_oneshot == HIBER_SUSP) {
+			pb_oneshot = HALL_IRQ;
+			pb_oneshot_unblock_button_events();
+		}
 		is_hall_wkup = 1;
 		hall_event = 0;
 		if (hall_dbg) 

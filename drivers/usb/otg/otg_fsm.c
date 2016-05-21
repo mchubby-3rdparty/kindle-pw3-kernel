@@ -253,6 +253,7 @@ int otg_statemachine(struct otg_fsm *fsm)
 {
 	enum usb_otg_state state;
 	unsigned long flags;
+	return 0;
 
 	spin_lock_irqsave(&fsm->lock, flags);
 

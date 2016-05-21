@@ -161,6 +161,8 @@ static int cyttsp4_init(struct cyttsp4_core_platform_data *pdata,
 				}
 			}
 		}
+		gpio_request(MX6SL_PIN_TOUCH_SWDL, "touch_not_used");
+		gpio_direction_input(MX6SL_PIN_TOUCH_SWDL);
 	} else {
 		gpio_free(rst_gpio);
 		gpio_free(irq_gpio);
@@ -357,22 +359,7 @@ void __init mx6sl_cyttsp4_init(void)
 {
 	struct kobject *properties_kobj;
 	int ret = 0;
-	//touch pins
-	ret = gpio_request(MX6SL_PIN_TOUCH_INTB, "touch_intb");
-	if(unlikely(ret)) return;
-	
-	ret = gpio_request(MX6SL_PIN_TOUCH_RST, "touch_rst");
-	if(unlikely(ret)) goto free_intb;
-	
-	ret = gpio_request(MX6SL_PIN_TOUCH_SWDL, "touch_not_used");
-	if(unlikely(ret)) goto free_rst;
-	
-	
-	gpio_direction_input(MX6SL_PIN_TOUCH_INTB);
-	gpio_direction_output(MX6SL_PIN_TOUCH_RST, 1);
-	gpio_direction_input(MX6SL_PIN_TOUCH_SWDL);
-	
-	
+
 	/* Register core and devices */
 	cyttsp4_register_core_device(&cyttsp4_core_info);
 	cyttsp4_register_device(&cyttsp4_mt_info);
@@ -386,11 +373,6 @@ void __init mx6sl_cyttsp4_init(void)
 		pr_err("%s: failed to create board_properties\n", __func__);
 
 	return;
-
-free_rst:
-	gpio_free(MX6SL_PIN_TOUCH_RST);
-free_intb:
-	gpio_free(MX6SL_PIN_TOUCH_INTB);
 }
 
 EXPORT_SYMBOL(mx6sl_cyttsp4_init);

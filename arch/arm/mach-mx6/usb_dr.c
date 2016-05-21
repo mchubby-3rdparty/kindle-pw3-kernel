@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013-2014 Freescale Semiconductor, Inc. All Rights Reserved.
+ * Copyright (C) 2013-2015 Freescale Semiconductor, Inc. All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,6 +16,8 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
+#define CONFIG_USB_EHCI_ARC_OTG
+
 #include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/clk.h>
@@ -29,16 +31,33 @@
 #include "regs-anadig.h"
 #include "usb.h"
 #include <mach/boardid.h>
+#include <linux/proc_fs.h>
 #include <boardid.h>
+#include <linux/delay.h>
+#include <linux/workqueue.h>
+
+static struct delayed_work otg_enum_check;
+static struct delayed_work otg_recovery_work;
 
 DEFINE_MUTEX(otg_wakeup_enable_mutex);
 static int usbotg_init_ext(struct platform_device *pdev);
+static void boot_otg_detect(struct platform_device *pdev);
 static void usbotg_uninit_ext(struct platform_device *pdev);
 static void usbotg_clock_gate(bool on);
 static void _dr_discharge_line(bool enable);
 extern bool usb_icbug_swfix_need(void);
 static void enter_phy_lowpower_suspend(struct fsl_usb2_platform_data *pdata, \
 								bool enable);
+
+void usb_otg_esd_recovery(void);
+
+extern int max77696_led_set_manual_mode(unsigned int led_id, bool manual_mode);
+extern int max77696_led_ctrl(unsigned int led_id, int led_state);
+
+#ifdef CONFIG_POWER_SODA
+extern bool soda_charger_docked(void);
+extern void soda_otg_vbus_output(int en, int ping);
+#endif
 
 /* The usb_phy1_clk do not have enable/disable function at clock.c
  * and PLL output for usb1's phy should be always enabled.
@@ -47,9 +66,20 @@ static void enter_phy_lowpower_suspend(struct fsl_usb2_platform_data *pdata, \
 static struct clk *usb_phy1_clk;
 static struct clk *usb_oh3_clk;
 static u8 otg_used;
+DEFINE_MUTEX(usb_clk_mutex);
 
 static void usbotg_wakeup_event_clear(void);
 extern int clk_get_usecount(struct clk *clk);
+extern int max77696_uic_is_otg_connected(void);
+
+/* VBus, ID Reset delay in ms
+ * this delay is needed for user-space daemons
+ * to recover completely JSEVENONE-4221
+ */
+#define RESET_DELAY			6000
+#define ENUMCHK_RECOVERY_TRIGGER_DELAY	8000
+#define ESD_RECOVERY_DEBOUNCE  3000
+
 /* Beginning of Common operation for DR port */
 
 /*
@@ -60,6 +90,7 @@ extern int clk_get_usecount(struct clk *clk);
 static struct fsl_usb2_platform_data dr_utmi_config = {
 	.name              = "DR",
 	.init              = usbotg_init_ext,
+	.late_init         = boot_otg_detect,
 	.exit              = usbotg_uninit_ext,
 	.phy_mode          = FSL_USB2_PHY_UTMI_WIDE,
 	.power_budget      = 500,		/* 500 mA max power */
@@ -67,7 +98,7 @@ static struct fsl_usb2_platform_data dr_utmi_config = {
 	.transceiver       = "utmi",
 	.phy_regs = USB_PHY0_BASE_ADDR,
 	.dr_discharge_line = _dr_discharge_line,
-	.lowpower	   = true, /* Default driver low power is true */
+	.lowpower	       = true, /* Default driver low power is true */
 };
 
 #ifdef CONFIG_MFD_MAX77696
@@ -89,13 +120,35 @@ lab126_board_is(BOARD_ID_PINOT_2GB) || \
 lab126_board_rev_greater_eq(BOARD_ID_PINOT_WFO_2GB_EVT1) || \
 lab126_board_rev_greater_eq(BOARD_ID_WARIO_2) || \
 lab126_board_is(BOARD_ID_BOURBON_WFO) || \
-lab126_board_is(BOARD_ID_BOURBON_WFO_PREEVT2) )
+lab126_board_is(BOARD_ID_BOURBON_WFO_PREEVT2) || \
+lab126_board_is(BOARD_ID_WHISKY_WAN) || \
+lab126_board_is(BOARD_ID_WHISKY_WFO) || \
+lab126_board_is(BOARD_ID_WOODY) )
 
-static void usbotg_force_bsession(bool connected) 
+int (* otg_sethost)(bool, void *) = NULL;
+EXPORT_SYMBOL(otg_sethost);
+void *otg_sethost_data = NULL;
+EXPORT_SYMBOL(otg_sethost_data);
+extern int max77696_charger_get_connected(void);
+extern bool max77696_uic_is_usbhost(void);
+DEFINE_MUTEX(udc_phy_force_mutex);
+static bool detect_forced = false;
+
+static bool usbmode_is_host = 0; 
+
+extern int max77696_charger_set_otg(int enable);
+extern int max77696_uic_is_otg_connected(void);
+extern int max77696_uic_is_otg_connected_irq(void);
+
+#ifdef CONFIG_POWER_SODA
+extern atomic_t soda_usb_charger_connected;
+#endif
+
+static void usbotg_force_bsession(bool connected)
 {
 	u32 contents;
 	contents = __raw_readl(MX6_IO_ADDRESS(ANATOP_BASE_ADDR) + HW_ANADIG_USB1_VBUS_DETECT);
-		
+
 	contents |= BM_ANADIG_USB1_VBUS_DETECT_VBUS_OVERRIDE_EN;
 
 	if (connected) {
@@ -110,17 +163,125 @@ static void usbotg_force_bsession(bool connected)
 	__raw_writel(contents, MX6_IO_ADDRESS(ANATOP_BASE_ADDR) + HW_ANADIG_USB1_VBUS_DETECT);
 }
 
-extern int max77696_charger_get_connected(void);
-extern bool max77696_uic_is_usbhost(void);
-DEFINE_MUTEX(udc_phy_force_mutex);
-static bool detect_forced = false;
 
-static void arcotg_usb_force_detect(bool detect, struct platform_device *pdev) {
+int audio_enumerated;
+EXPORT_SYMBOL(audio_enumerated);
+extern int max77696_charger_set_icl(void);
+
+void otg_check_enumeration(int ms)
+{
+	schedule_delayed_work(&otg_enum_check, msecs_to_jiffies(ms));
+}
+EXPORT_SYMBOL(otg_check_enumeration);
+
+/*
+ * internal function being call by recovery or enumeration works in this driver (usb_dr.c)
+ * the actual function exported is a version that could cancel all pending works and run this internal function
+ * */
+void asession_enable__(bool connected) 
+{
+	u32 contents;
+	mutex_lock(&udc_phy_force_mutex);
+	if(usbmode_is_host != connected ) {
+
+		contents = __raw_readl(MX6_IO_ADDRESS(ANATOP_BASE_ADDR) + HW_ANADIG_USB1_VBUS_DETECT);
+			
+		contents |= BM_ANADIG_USB1_VBUS_DETECT_VBUS_OVERRIDE_EN;
+
+		if (connected) {
+			contents |= BM_ANADIG_USB1_VBUS_DETECT_AVALID_OVERRIDE;
+			contents |= BM_ANADIG_USB1_VBUS_DETECT_VBUSVALID_OVERRIDE;
+			contents &= ~BM_ANADIG_USB1_VBUS_DETECT_SESSEND_OVERRIDE;
+		} else {
+			contents &= ~BM_ANADIG_USB1_VBUS_DETECT_AVALID_OVERRIDE;
+			contents &= ~BM_ANADIG_USB1_VBUS_DETECT_VBUSVALID_OVERRIDE;
+			contents |= BM_ANADIG_USB1_VBUS_DETECT_SESSEND_OVERRIDE;
+		}
+		__raw_writel(contents, MX6_IO_ADDRESS(ANATOP_BASE_ADDR) + HW_ANADIG_USB1_VBUS_DETECT);
+		if (otg_sethost) {
+			otg_sethost(connected, otg_sethost_data);
+		}
+
+		if(connected) {
+			printk(KERN_DEBUG "\nSchedule OTG enumeration triggered recovery\n");
+			otg_check_enumeration(ENUMCHK_RECOVERY_TRIGGER_DELAY);
+		}
+		usbmode_is_host = connected;
+	}
+	mutex_unlock(&udc_phy_force_mutex);
+}
+
+/*
+ * this is the entry point of OTG connect or disconnect
+ * it should take precedence over whatever pending about OTG
+ * make sure 
+ * */
+void asession_enable(bool connected) 
+{
+	cancel_delayed_work_sync(&otg_enum_check);
+	cancel_delayed_work_sync(&otg_recovery_work);
+	asession_enable__(connected);
+}
+EXPORT_SYMBOL(asession_enable);
+
+static void otg_enum_fn(struct work_struct *work)
+{
+	int reset_delay = (usbmode_is_host == 0 ? 0 : RESET_DELAY);
+#ifdef CONFIG_POWER_SODA
+	if(!audio_enumerated && soda_charger_docked() && max77696_uic_is_otg_connected() ) {
+		printk(KERN_ERR "with soda: %s not enumerated, catcha!", __func__);
+
+		asession_enable__(false);
+		soda_otg_vbus_output(0, 0);	
+		msleep(reset_delay);
+		soda_otg_vbus_output(1, 0);	
+		asession_enable__(true);
+		max77696_charger_set_icl();
+	}else {
+		//printk(KERN_ERR "okay, either otg is not connected, or connected and enumerated successfully. ");
+		printk(KERN_ERR "is_otg_connected() %d audio_enumerated %d, soda_charger_docked %d", max77696_uic_is_otg_connected(), audio_enumerated, soda_charger_docked());
+	}
+#else
+	if(!audio_enumerated && max77696_uic_is_otg_connected() ) {
+		printk(KERN_ERR " %s not enumerated, catcha!", __func__);
+		asession_enable__(false);
+		max77696_charger_set_otg(0);
+		msleep(reset_delay);
+		max77696_charger_set_otg(1);
+		asession_enable__(true);
+		/* Turn OFF amber led - manual mode */
+		max77696_led_ctrl(MAX77696_LED_AMBER, MAX77696_LED_OFF);
+		/* Turn OFF green led - manual mode */
+		max77696_led_ctrl(MAX77696_LED_GREEN, MAX77696_LED_OFF);
+	}else {
+		//printk(KERN_ERR "okay, either otg is not connected, or connected and enumerated successfully. ");
+		printk(KERN_ERR "is_otg_connected() %d audio_enumerated %d", max77696_uic_is_otg_connected(), audio_enumerated);
+	}
+	
+#endif
+}
+
+static void otg_recovery_work_fn(struct work_struct *work)
+{
+	usb_otg_esd_recovery();
+}
+
+void otg_esd_recovery_kick(int ms)
+{
+	int ret;
+	printk(KERN_DEBUG "%s() recovery will happen in %d ms", __func__, ms);
+	ret = cancel_delayed_work_sync(&otg_recovery_work);
+	printk(KERN_DEBUG "%s() cancel sync previous %d", __func__, ret);
+	schedule_delayed_work(&otg_recovery_work, msecs_to_jiffies(ms));
+}
+EXPORT_SYMBOL(otg_esd_recovery_kick);
+
+static void arcotg_usb_force_detect(bool detect) {
+
 	mutex_lock(&udc_phy_force_mutex);
 
 	if (detect != detect_forced) {
 		struct regulator *phyreg = regulator_get(NULL, "USB_GADGET_PHY");
-
 		if (!IS_ERR(phyreg)) {
 			if (detect) {
 				regulator_enable(phyreg);
@@ -130,22 +291,154 @@ static void arcotg_usb_force_detect(bool detect, struct platform_device *pdev) {
 				regulator_disable(phyreg);
 			}
 		} else {
-			dev_err(&pdev->dev, "Could not get USB PHY Regulator\n");
+			printk(KERN_ERR "Could not get USB PHY Regulator\n");
 		}
+		regulator_put(phyreg);
 		detect_forced = detect;
 	}
 	mutex_unlock(&udc_phy_force_mutex);
 }
 
+int asession_write(struct file *file, const char __user *buffer, unsigned long count, void *data) {
+	
+	int detect = 99, param = 0;
+	struct regulator *wan_reg;
+
+	sscanf(buffer, "%d %d", &detect, &param);
+	switch(detect)
+	{
+		case 0:
+		case 1:
+			asession_enable__(!!detect);
+			break;
+		
+		case 3:
+			usbotg_clock_gate(0);
+			break;
+		case 4:
+			usbotg_clock_gate(1);
+			break;
+		case 41:
+			clk_enable(usb_phy1_clk);
+			printk(KERN_DEBUG "clk_enable(usb_phy1_clk); clk_get_usecount(usb_phy1_clk) %d", clk_get_usecount(usb_phy1_clk));
+			break;
+		case 42:
+			clk_enable(usb_oh3_clk);
+			printk(KERN_DEBUG "clk_enable(usb_oh3_clk); clk_get_usecount(usb_oh3_clk) %d", clk_get_usecount(usb_oh3_clk));
+			break;
+		case 43:
+			clk_disable(usb_phy1_clk);
+			printk(KERN_DEBUG "clk_disable(usb_phy1_clk); clk_get_usecount(usb_phy1_clk) %d", clk_get_usecount(usb_phy1_clk));
+			break;
+		case 44:
+			clk_disable(usb_oh3_clk);
+			printk(KERN_DEBUG "clk_disable(usb_oh3_clk); clk_get_usecount(usb_oh3_clk) %d", clk_get_usecount(usb_oh3_clk));
+			break;
+		case 5:
+			arcotg_usb_force_detect(!!param);
+			break;
+		case 6:
+			usbotg_force_bsession(!!param);
+			break;
+		case 7:
+			wan_reg = regulator_get(NULL, "WAN_USB_HOST_PHY");
+			if (!IS_ERR(wan_reg)) 
+				regulator_enable(wan_reg);
+			regulator_put(wan_reg);
+			break;
+		case 8:
+			wan_reg = regulator_get(NULL, "WAN_USB_HOST_PHY");
+			if (!IS_ERR(wan_reg))
+				regulator_disable(wan_reg);
+			regulator_put(wan_reg);
+			break;
+		case 9:
+			wan_reg = regulator_get(NULL, "USB_GADGET_PHY");
+			if (!IS_ERR(wan_reg)) 
+				regulator_enable(wan_reg);
+			regulator_put(wan_reg);
+			break;
+		case 10:
+			wan_reg = regulator_get(NULL, "USB_GADGET_PHY");
+			if (!IS_ERR(wan_reg))
+				regulator_disable(wan_reg);
+			regulator_put(wan_reg);
+			break;	
+		case 11:
+			printk(KERN_DEBUG "User-space triggered recovery /proc/asession entry 11\n");
+			otg_esd_recovery_kick(ESD_RECOVERY_DEBOUNCE);
+			break;
+		default:
+			break;
+	}
+	return count;
+}
+
+/**** PROC ENTRY ****/
+static int asession_proc_read(char *page, char **start, off_t off,
+		int count, int *eof, void *data)
+{
+	int len;
+
+	
+	len = sprintf(page, "max77696_charger_get_connected() %d \n"
+						"max77696_uic_is_usbhost() %d \n "
+						"max77696_uic_is_otg_connected() %d\n "
+						 "clk_get_usecount(usb_oh3_clk), %d \n"
+						 "clk_get_usecount(usb_phy1_clk) %d\n"
+						 ,
+				max77696_charger_get_connected(),
+				max77696_uic_is_usbhost(),
+				max77696_uic_is_otg_connected() ,
+				clk_get_usecount(usb_oh3_clk), clk_get_usecount(usb_phy1_clk) );
+	
+	return len;
+}
+
+void setup_asession_proc(struct platform_device* pdev) {
+	struct proc_dir_entry *asession_proc_entry;
+
+	asession_proc_entry = create_proc_entry("asession", S_IRUGO, NULL);
+
+	if (asession_proc_entry) {
+		asession_proc_entry->read_proc = asession_proc_read;
+		asession_proc_entry->write_proc = asession_write;
+		asession_proc_entry->data = pdev;
+	} else {
+		printk(KERN_ERR "Failed to initialize asession proc entry\n");
+	}
+}
+
 static void pmic_chgin_cb (void *obj, void *param) {
-	struct platform_device *pdev = (struct platform_device *) param;
-	arcotg_usb_force_detect(true, pdev);
+	
+#if defined(CONFIG_POWER_SODA)
+	return; //driven by pmic_soda_connects_notify_usb_in
+#else
+	arcotg_usb_force_detect(true);
+#endif
 };
 
 static void pmic_chgout_cb (void *obj, void *param) {
-	struct platform_device *pdev = (struct platform_device *) param;
-	arcotg_usb_force_detect(false, pdev);
+	
+#if defined(CONFIG_POWER_SODA)
+	return; //driven by pmic_soda_connects_notify_usb_out
+#else
+	arcotg_usb_force_detect(false);
+#endif
 };
+
+#if defined(CONFIG_POWER_SODA)
+void pmic_soda_connects_notify_usb_in(void)
+{
+	arcotg_usb_force_detect(true);
+}
+EXPORT_SYMBOL(pmic_soda_connects_notify_usb_in);
+
+void pmic_soda_connects_notify_usb_out(void){
+	arcotg_usb_force_detect(false);
+}
+EXPORT_SYMBOL(pmic_soda_connects_notify_usb_out);
+#endif
 
 static pmic_event_callback_t pmic_chgin = {
 	.func = pmic_chgin_cb,
@@ -173,6 +466,16 @@ static void usbotg_internal_phy_clock_gate(bool on)
 	}
 }
 
+int usb_dr_get_clock_ref(void)
+{
+	int ret;
+	mutex_lock(&usb_clk_mutex);
+	ret = min(clk_get_usecount(usb_oh3_clk), clk_get_usecount(usb_phy1_clk));
+	mutex_unlock(&usb_clk_mutex);
+	return ret;
+}
+EXPORT_SYMBOL(usb_dr_get_clock_ref);
+
 static int usb_phy_enable(struct fsl_usb2_platform_data *pdata)
 {
 	u32 tmp;
@@ -193,10 +496,10 @@ static int usb_phy_enable(struct fsl_usb2_platform_data *pdata)
 	 * low power mode, do it manually.
 	 */
 	if (UOG_PORTSC1 & PORTSC_PHCD) {
-		UOG_PORTSC1 &= ~PORTSC_PHCD;
-		mdelay(1);
+		UOG_PORTSC1 &= ~PORTSC_PHCD;	
 	}
-
+	/* Wait PHY clock stable */
+	mdelay(1);
 	/* Reset USBPHY module */
 	phy_ctrl = phy_reg + HW_USBPHY_CTRL;
 	tmp = __raw_readl(phy_ctrl);
@@ -228,7 +531,7 @@ static int usb_phy_enable(struct fsl_usb2_platform_data *pdata)
 	/* Set Termination Impedance for Wario platform and leave
 	 * USBPHY_TX_EDGECTRL as default */
 	__raw_writel(
-		(__raw_readl(phy_reg + HW_USBPHY_TX) & 
+		(__raw_readl(phy_reg + HW_USBPHY_TX) &
 			BM_USBPHY_TX_USBPHY_TX_EDGECTRL) |
 
 		BF_USBPHY_TX_TXCAL45DP(0x9) |
@@ -244,6 +547,54 @@ static int usb_phy_enable(struct fsl_usb2_platform_data *pdata)
 
 	return 0;
 }
+
+void usb_otg_esd_recovery(void)
+{
+#ifdef CONFIG_POWER_SODA
+	if(max77696_uic_is_otg_connected() && soda_charger_docked()) {
+		asession_enable__(false);
+		soda_otg_vbus_output(0, 0);
+		msleep(RESET_DELAY);
+		soda_otg_vbus_output(1, 0);
+		asession_enable__(true);
+		
+	}else {
+		printk(KERN_ERR "not a usb host or no soda connected, doing nothing");
+	}
+#else
+	if(max77696_uic_is_otg_connected()) {
+		asession_enable__(false);
+		max77696_charger_set_otg(0);
+		
+		msleep(RESET_DELAY);
+		
+		max77696_charger_set_otg(1);
+		asession_enable__(true);
+		/* Turn OFF amber led - manual mode */
+		max77696_led_ctrl(MAX77696_LED_AMBER, MAX77696_LED_OFF);
+		/* Turn OFF green led - manual mode */
+		max77696_led_ctrl(MAX77696_LED_GREEN, MAX77696_LED_OFF);
+	}else {
+		printk(KERN_ERR "not a usb host, doing nothing");
+	}
+#endif
+
+}
+EXPORT_SYMBOL(usb_otg_esd_recovery);
+
+static void boot_otg_detect(struct platform_device *pdev)
+{
+	if ( max77696_charger_get_connected() && max77696_uic_is_usbhost()) {
+		printk(KERN_INFO "boot:USB host cable is already plugged in. Simulating event\n");
+		arcotg_usb_force_detect(false);
+		arcotg_usb_force_detect(true);
+	}else if (max77696_uic_is_otg_connected()) {
+		printk(KERN_INFO "boot:USB OTG cable might be already plugged in. Simulating event otg_check_enumeration;\n");
+		usbmode_is_host = 0; //so that from otg_enum_fn -> asession_enable__(0) does nothing, but asession_enable__(1) will kick in  
+		otg_check_enumeration(1000);
+	}
+}
+
 /* Notes: configure USB clock and setup PMIC events */
 static int usbotg_init_ext(struct platform_device *pdev)
 {
@@ -291,10 +642,13 @@ static int usbotg_init_ext(struct platform_device *pdev)
 			printk(KERN_ERR "Could not register charger out callback.\n");
 		}
 
+#ifndef CONFIG_USB_OTG
 		if ( max77696_charger_get_connected() && max77696_uic_is_usbhost()) {
 			printk("USB Cable is already plugged in. Simulating event\n");
-			arcotg_usb_force_detect(true, pdev);
-		}
+			arcotg_usb_force_detect(true);
+		} 
+#endif //not defined CONFIG_USB_OTG
+
 	}
 #endif
 
@@ -318,9 +672,13 @@ static void usbotg_uninit_ext(struct platform_device *pdev)
 #endif
 }
 
-static void usbotg_clock_gate(bool on)
+void usbotg_clock_gate(bool on)
 {
 	pr_debug("%s: on is %d\n", __func__, on);
+	mutex_lock(&usb_clk_mutex);
+	if( (on == false) && ((clk_get_usecount(usb_oh3_clk) == 0) || (clk_get_usecount(usb_phy1_clk) == 0)) ) {
+		goto out;
+	}
 	if (on) {
 		clk_enable(usb_oh3_clk);
 		clk_enable(usb_phy1_clk);
@@ -328,8 +686,12 @@ static void usbotg_clock_gate(bool on)
 		clk_disable(usb_phy1_clk);
 		clk_disable(usb_oh3_clk);
 	}
+out:
+	mutex_unlock(&usb_clk_mutex);
 	pr_debug("usb_oh3_clk:%d, usb_phy_clk1_ref_count:%d\n", clk_get_usecount(usb_oh3_clk), clk_get_usecount(usb_phy1_clk));
 }
+
+EXPORT_SYMBOL(usbotg_clock_gate);
 
 static void dr_platform_phy_power_on(void)
 {
@@ -382,9 +744,14 @@ static void enter_phy_lowpower_suspend(struct fsl_usb2_platform_data *pdata, boo
 	} else {
 		if (UOG_PORTSC1 & PORTSC_PHCD) {
 			UOG_PORTSC1 &= ~PORTSC_PHCD;
-			mdelay(1);
 		}
+		
+		/* Wait PHY clock stable */
+		mdelay(1);
+		
 		usbotg_internal_phy_clock_gate(true);
+                udelay(2);
+
 		tmp = (BM_USBPHY_PWD_TXPWDFS
 			| BM_USBPHY_PWD_TXPWDIBIAS
 			| BM_USBPHY_PWD_TXPWDV2I
@@ -398,8 +765,14 @@ static void enter_phy_lowpower_suspend(struct fsl_usb2_platform_data *pdata, boo
 		 * it needs 10 clocks from 32Khz to normal work state, so
 		 * 500us is the safe value for PHY enters stable status
 		 * according to IC engineer.
+		 *
+		 * Besides, the digital value needs 1ms debounce time to
+		 * wait the value to be stable. We have expected the
+		 * value from OTGSC is correct after calling this API.
+		 *
+		 * So delay 2ms is a safe value.
 		 */
-		udelay(500);
+		mdelay(2);
 
 	}
 	pr_debug("DR: %s ends, enable is %d\n", __func__, enable);
@@ -669,8 +1042,9 @@ static enum usb_wakeup_event _is_host_wakeup(struct fsl_usb2_platform_data *pdat
 	if (wakeup_req) {
 		pr_debug("the otgsc is 0x%x, usbsts is 0x%x, portsc is 0x%x, wakeup_irq is 0x%x\n", UOG_OTGSC, UOG_USBSTS, UOG_PORTSC1, wakeup_req);
 	}
+
 	/* if ID change sts, it is a host wakeup event */
-	if (otgsc & OTGSC_IS_USB_ID) {
+	if (otgsc & OTGSC_IS_USB_ID || max77696_uic_is_otg_connected_irq()) {
 		pr_debug("otg host ID wakeup\n");
 		/* if host ID wakeup, we must clear the ID change sts */
 		otgsc |= OTGSC_IS_USB_ID;
@@ -680,6 +1054,7 @@ static enum usb_wakeup_event _is_host_wakeup(struct fsl_usb2_platform_data *pdat
 		pr_debug("otg host Remote wakeup\n");
 		return WAKEUP_EVENT_DPDM;
 	}
+
 	return WAKEUP_EVENT_INVALID;
 }
 
@@ -692,8 +1067,37 @@ static void host_wakeup_handler(struct fsl_usb2_platform_data *pdata)
 #endif /* CONFIG_USB_EHCI_ARC_OTG */
 
 
-#ifdef CONFIG_USB_GADGET_ARC
+#if defined(CONFIG_USB_GADGET_ARC)
 /* Beginning of device related operation for DR port */
+
+static int fsl_platform_config_phy_parameters(void)
+{
+	void __iomem *phy_reg = MX6_IO_ADDRESS(USB_PHY0_BASE_ADDR);
+	u32 phy_tx_parameter;
+
+	switch (UOG_PORTSC1 & PORTSC_PORT_SPEED_MASK) {
+	case PORTSC_PORT_SPEED_HIGH:
+		phy_tx_parameter = ((__raw_readl(phy_reg + HW_USBPHY_TX) & BM_USBPHY_TX_USBPHY_TX_EDGECTRL) |
+					        BF_USBPHY_TX_TXCAL45DP(0x7) |
+							BF_USBPHY_TX_TXCAL45DN(0x7) |
+							BF_USBPHY_TX_D_CAL(0x1));
+		break;
+	case PORTSC_PORT_SPEED_FULL:
+	case PORTSC_PORT_SPEED_LOW:
+		phy_tx_parameter = ((__raw_readl(phy_reg + HW_USBPHY_TX) & BM_USBPHY_TX_USBPHY_TX_EDGECTRL) |
+					        BF_USBPHY_TX_TXCAL45DP(0xC) |
+							BF_USBPHY_TX_TXCAL45DN(0xC) |
+							BF_USBPHY_TX_D_CAL(0x1));
+		break;
+	default:
+		printk("ERROR: the speed is undef after bus reset\n");
+		return -EPROTO;
+	}
+	__raw_writel(phy_tx_parameter, phy_reg + HW_USBPHY_TX);
+	return 0;
+}
+
+
 static void _device_phy_lowpower_suspend(struct fsl_usb2_platform_data *pdata, bool enable)
 {
 	__phy_lowpower_suspend(pdata, enable, ENABLED_BY_DEVICE);
@@ -718,6 +1122,8 @@ static void _device_wakeup_enable(struct fsl_usb2_platform_data *pdata, bool ena
 		USB_OTG_CTRL &= ~UCTRL_WKUP_VBUS_EN;
 	}
 }
+
+extern u8 pmic_soda_conects_usb_in(void);
 
 static enum usb_wakeup_event _is_device_wakeup(struct fsl_usb2_platform_data *pdata)
 {
@@ -801,7 +1207,7 @@ static int  __init mx6_usb_dr_init(void)
 	i++;
 #endif
 #ifdef CONFIG_USB_EHCI_ARC_OTG
-	dr_utmi_config.operating_mode = DR_HOST_MODE;
+	dr_utmi_config.operating_mode = FSL_USB2_DR_OTG;
 	dr_utmi_config.wake_up_enable = _host_wakeup_enable;
 	if (usb_icbug_swfix_need()) {
 		dr_utmi_config.platform_rh_suspend = _host_platform_rh_suspend_swfix;
@@ -811,6 +1217,7 @@ static int  __init mx6_usb_dr_init(void)
 		dr_utmi_config.platform_rh_resume  = _host_platform_rh_resume;
 	}
 	dr_utmi_config.platform_set_disconnect_det = fsl_platform_otg_set_usb_phy_dis;
+	dr_utmi_config.platform_config_phy_parameters = NULL;
 	dr_utmi_config.phy_lowpower_suspend = _host_phy_lowpower_suspend;
 	dr_utmi_config.is_wakeup_event = _is_host_wakeup;
 	dr_utmi_config.wakeup_pdata = &dr_wakeup_config;
@@ -821,11 +1228,19 @@ static int  __init mx6_usb_dr_init(void)
 	i++;
 #endif
 #ifdef CONFIG_USB_GADGET_ARC
-	dr_utmi_config.operating_mode = DR_UDC_MODE;
+	dr_utmi_config.operating_mode = FSL_USB2_MPH_HOST;
 	dr_utmi_config.wake_up_enable = _device_wakeup_enable;
 	dr_utmi_config.platform_rh_suspend = NULL;
 	dr_utmi_config.platform_rh_resume  = NULL;
 	dr_utmi_config.platform_set_disconnect_det = NULL;
+#ifdef CONFIG_LAB126
+	if (lab126_board_is(BOARD_ID_WHISKY_WAN) ||
+		lab126_board_is(BOARD_ID_WHISKY_WFO) ||
+		lab126_board_is(BOARD_ID_WOODY) ) 
+		dr_utmi_config.platform_config_phy_parameters = fsl_platform_config_phy_parameters;
+	else 
+#endif
+	dr_utmi_config.platform_config_phy_parameters = NULL;
 	dr_utmi_config.phy_lowpower_suspend = _device_phy_lowpower_suspend;
 	dr_utmi_config.is_wakeup_event = _is_device_wakeup;
 	dr_utmi_config.wakeup_pdata = &dr_wakeup_config;
@@ -844,6 +1259,9 @@ static int  __init mx6_usb_dr_init(void)
 		((struct fsl_usb2_platform_data *)(pdev[i]->dev.platform_data))->wakeup_pdata =
 			(struct fsl_usb2_wakeup_platform_data *)(pdev_wakeup->dev.platform_data);
 	}
+	setup_asession_proc(pdev[0]);
+	INIT_DELAYED_WORK(&otg_enum_check, otg_enum_fn);
+	INIT_DELAYED_WORK(&otg_recovery_work, otg_recovery_work_fn);
 
 	return 0;
 }
@@ -853,6 +1271,9 @@ static void __exit mx6_usb_dr_exit(void)
 {
 	int i;
 	void __iomem *anatop_base_addr = MX6_IO_ADDRESS(ANATOP_BASE_ADDR);
+	
+	cancel_delayed_work(&otg_enum_check);
+	cancel_delayed_work(&otg_recovery_work);
 
 	for (i = 0; i < devnum; i++)
 		platform_device_del(pdev[devnum-i-1]);

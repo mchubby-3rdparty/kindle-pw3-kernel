@@ -909,7 +909,11 @@ static __devinit int max77696_epd_vreg_probe (struct platform_device *pdev)
 	me->dev  = &(pdev->dev);
 	me->rdesc = epd_rdesc;
 	me->regdata = reg_data;
-	me->display_3v2_regulator = regulator_get(NULL, "DISP_3V2");
+	if(CONFIG_BOARD_DISP_TOUCH_LS_IN_MAX77696)
+		me->display_3v2_regulator = regulator_get(NULL, "DISP_GATED");
+	else
+		me->display_3v2_regulator = regulator_get(NULL, "DISP_GATED-old");
+
 	regulator_enable(me->display_3v2_regulator);
 
 	me->irq = chip->irq_base + MAX77696_ROOTINT_EPD;

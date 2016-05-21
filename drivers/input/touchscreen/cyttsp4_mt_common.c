@@ -29,8 +29,16 @@
 
 #include <linux/cpufreq.h>
 #include "cyttsp4_mt_common.h"
-#include <boardid.h>
 #include <mach/boardid.h>
+#include <boardid.h>
+
+
+
+#define PANEL_FLIP_X   (lab126_board_is(BOARD_ID_MUSCAT_WAN) || \
+                         lab126_board_is(BOARD_ID_MUSCAT_WFO))
+	
+#define PANEL_FLIP_Y   (lab126_board_is(BOARD_ID_WHISKY_WAN) || \
+                         lab126_board_is(BOARD_ID_WHISKY_WFO) || lab126_board_is(BOARD_ID_WOODY))
 
 static void send_user_event(struct cyttsp4_mt_data *md, u8 prev, u8 cur)
 {
@@ -713,10 +721,13 @@ static int cyttsp4_mt_probe(struct cyttsp4_device *ttsp)
 		goto error_alloc_data_failed;
 	}
 
-	if(lab126_board_is(BOARD_ID_MUSCAT_WAN) || lab126_board_is(BOARD_ID_MUSCAT_WFO))
-		pdata->flags = CY_FLAG_INV_X;
-
 	cyttsp4_init_function_ptrs(md);
+	
+	if(PANEL_FLIP_X)
+		pdata->flags = CY_FLAG_INV_X;
+	
+	if(PANEL_FLIP_Y)
+		pdata->flags = CY_FLAG_INV_Y;
 
 	md->prv_tch_type = CY_OBJ_STANDARD_FINGER;
 	md->ttsp = ttsp;

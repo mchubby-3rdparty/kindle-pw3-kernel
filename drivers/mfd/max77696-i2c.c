@@ -20,14 +20,18 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
+#include <linux/delay.h>
 #include <linux/err.h>
 #include <linux/slab.h>
 #include <linux/interrupt.h>
 #include <linux/i2c.h>
 #include <linux/mutex.h>
-
 #include <linux/mfd/max77696.h>
-
+#include <mach/boardid.h>
+#ifdef CONFIG_FALCON
+#include <max77696_registers.h>
+extern int in_falcon(void);
+#endif
 #define DRIVER_DESC    "MAX77696 I2C Driver"
 #define DRIVER_AUTHOR  "Jayden Cha <jayden.cha@maxim-ic.com>"
 #define DRIVER_NAME    MAX77696_NAME
@@ -432,24 +436,331 @@ static __devexit int max77696_i2c_remove (struct i2c_client *client)
 }
 
 #ifdef CONFIG_PM_SLEEP
+
+#ifdef CONFIG_FALCON
+/* During hibernate if we can't save/restore a register we panic instead of letting the device continue in an
+ * inconsistent state. Since we are going to panic on failure, we might as well allow a generous number of retries on
+ * each register operation.
+ */
+#define REGISTER_RETRY 30
+
+/*
+ * This list represents all of the registers in the main PMIC block that should
+ * be restored after a hibernate. This is every register that is not a read
+ * only status, interrupt status, register lockout control, watchdog control,
+ * or shutdown control.
+ *
+ * JSEVEN-4174: Don't restore LED brightness regs (0x6c-0x6e).
+ * WS-1306: Don't restore LDO7 since already done in uboot 
+ */
+static u8 pmic_regs_to_save[] = {
+0x01, 0x02, 0x03, 0x06, 0x09, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12,
+0x13, 0x14, 0x16, 0x18, 0x1a, 0x1b, 0x1d, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2f,
+0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b, 0x3c,
+0x3d, 0x3e, 0x3f, 0x41, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x4b,
+0x4c, 0x4d, 0x4e, /* 0x4f,*/ 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x59, 0x5a,
+0x5b, 0x5c, 0x5d, 0x5e, 0x5f, 0x60, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69,
+0x6b, /* 0x6c, 0x6d, 0x6e,*/ 0x6f, 0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77,
+0x78, 0x79, 0x7a, 0x7b, 0x7c, 0x7d, 0x7e, 0x7f, 0x80, 0x81, 0x82, 0x83, 0x84,
+0x85, 0x86, 0x87, 0x88, 0x89, 0x8a, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f, 0x90, 0x91,
+0x92, 0x93, 0x94, 0x95, 0x9a, 0x9b, 0xa3, 0xa5, 0xaf, 0xb0, 0xb3, 0xb4, 0xb5
+};
+
+
+#define UIC_SAVE_START (0x5)
+#define UIC_SAVE_END   (0xC)
+
+
+#define CHGB_SAVE_START (0x36)
+#define CHGB_SAVE_END   (0x3c)
+#define CHGB_SAVE_EXTRA (0x3f)
+
+static u8 rtc_registers_to_dump[] = {
+    RTC_RTCINTM_REG,
+    RTC_RTCCNTLM_REG,
+    RTC_RTCCNTL_REG,
+    RTC_RTCUPDATE0_REG,
+    RTC_RTCSMPL_REG,
+    RTC_RTCAE1_REG,
+    RTC_RTCSECA1_REG,
+    RTC_RTCMINA1_REG,
+    RTC_RTCHOURA1_REG,
+    RTC_RTCDOWA1_REG,
+    RTC_RTCMONTHA1_REG,
+    RTC_RTCYEARA1_REG,
+    RTC_RTCDOMA1_REG,
+    RTC_RTCAE2_REG,
+    RTC_RTCSECA2_REG,
+    RTC_RTCMINA2_REG,
+    RTC_RTCHOURA2_REG,
+    RTC_RTCDOWA2_REG,
+    RTC_RTCMONTHA2_REG,
+    RTC_RTCYEARA2_REG,
+    RTC_RTCDOMA2_REG,
+};
+
+// Read these separately.  These must be synced first, and are expected to change.
+static u8 rtc_time_registers[] = {
+    RTC_RTCSEC_REG,
+    RTC_RTCMIN_REG,
+    RTC_RTCHOUR_REG,
+    RTC_RTCDOW_REG,
+    RTC_RTCMONTH_REG,
+    RTC_RTCYEAR_REG,
+    RTC_RTCDOM_REG,
+};
+
+static u8 pmic_saved_vals[ARRAY_SIZE(pmic_regs_to_save)];
+
+static u8 chgb_saved_vals[(CHGB_SAVE_END - UIC_SAVE_END + 1)];
+static u8 chgb_saved_extra;
+
+static u8 uic_saved_vals[(UIC_SAVE_END - UIC_SAVE_START + 1)];
+
+static u8 rtc_reg_vals[ARRAY_SIZE(rtc_registers_to_dump)];
+
+/*
+ * These symbols (imx_i2c*) are defined here so that the kernel can compile as
+ * a self-contained unit.
+ * They will be assigned to a valid pointer by snapshot driver.
+ * BE VERY CAREFUL WITH THESE.  They are not synchronized and cannot be used
+ * outside of hibernate.
+ */
+int dummy_read_func (u8 slave_addr, u8 slave_register, u8 *outbuf, int count)
+{
+	panic("imx_i2c_read_bytes called without being initialized");
+}
+int dummy_write_func (u8 slave_addr, u8 slave_register, u8 value)
+{
+	panic("imx_i2c_write_single called without being initialized");
+}
+int (*imx_i2c_read_bytes)(u8 slave_addr, u8 slave_register, u8 *outbuf, int count) = dummy_read_func;
+EXPORT_SYMBOL(imx_i2c_read_bytes);
+int (*imx_i2c_write_single)(u8 slave_addr, u8 slave_register, u8 value) = dummy_write_func;
+EXPORT_SYMBOL(imx_i2c_write_single);
+
+static void max77696_i2c_retry_read_register(struct max77696_i2c *i2c, u8 reg, u8 *buffer, const char *error_src) {
+    int retries, rc;
+
+    for (retries = 0; retries < REGISTER_RETRY; retries++) {
+        if ((rc = imx_i2c_read_bytes(i2c->client->addr, reg, buffer, 1))) {
+            *buffer = 0;
+            printk(KERN_CRIT "%s: Failed to read value for register %02hhx (%d)\n",
+                error_src, reg, rc);
+        } else {
+            return;
+        }
+    }
+
+    panic("%s: Unable to read value for PMIC register\n", error_src);
+}
+
+static void max77696_i2c_retry_write_register(struct max77696_i2c *i2c, u8 reg, u8 value, const char *error_src) {
+    int retries, rc;
+
+    for (retries = 0; retries < REGISTER_RETRY; retries++) {
+        if ((rc = imx_i2c_write_single(i2c->client->addr, reg, value))) {
+            printk(KERN_CRIT "%s: Failed to write value to register [%02hhx]=%02hhx (%d)\n",
+                error_src, reg, value, rc);
+        } else {
+            return;
+        }
+    }
+
+    panic("%s: Unable to write value to PMIC register\n", error_src);
+}
+
+static void max77696_i2c_retry_read_register16(struct max77696_i2c *i2c, u8 reg, u16 *buffer, const char *error_src) {
+    int retries, rc;
+
+    for (retries = 0; retries < REGISTER_RETRY; retries++) {
+        if ((rc = imx_i2c_read_bytes(i2c->client->addr, reg, (u8*)buffer, 2))) {
+            *buffer = 0;
+            printk(KERN_CRIT "%s: Failed to read value for register %02hhx (%d)\n",
+                error_src, reg, rc);
+        } else {
+            return;
+        }
+    }
+
+    panic("%s: Unable to read value for PMIC register\n", error_src);
+}
+
+static void save_pmic_block(struct max77696_chip *chip)
+{
+    int i;
+
+    for (i=0; i<ARRAY_SIZE(pmic_regs_to_save); i++) {
+        max77696_i2c_retry_read_register(&(chip->pmic_i2c), pmic_regs_to_save[i], pmic_saved_vals + i, __func__);
+    }
+}
+
+static void restore_pmic_block(struct max77696_chip *chip)
+{
+    int i;
+
+    // Unlock the charger registers
+    max77696_i2c_retry_write_register(&(chip->pmic_i2c), CHGA_CHG_CNFG_06_REG, CHGA_CHG_CNFG_06_CHGPROT_M, __func__);
+
+    for (i=0; i<ARRAY_SIZE(pmic_regs_to_save); i++) {
+        max77696_i2c_retry_write_register(&(chip->pmic_i2c), pmic_regs_to_save[i], pmic_saved_vals[i], __func__);
+    }
+
+    // Lock the charger registers
+    max77696_i2c_retry_write_register(&(chip->pmic_i2c), CHGA_CHG_CNFG_06_REG, 0, __func__);
+}
+
+static void save_uic_block(struct max77696_chip *chip)
+{
+    int i;
+
+    for (i=UIC_SAVE_START; i<= UIC_SAVE_END; i++) {
+        max77696_i2c_retry_read_register(&(chip->uic_i2c), (u8)i, uic_saved_vals +(i-UIC_SAVE_START), __func__);
+    }
+}
+
+static void restore_uic_block(struct max77696_chip *chip)
+{
+    int i;
+
+    for (i=UIC_SAVE_START; i<= UIC_SAVE_END; i++) {
+        max77696_i2c_retry_write_register(&(chip->uic_i2c), (u8)i, uic_saved_vals[i-UIC_SAVE_START], __func__);
+    }
+}
+
+// Refer to datasheet
+static void max77696_rtc_sync_read_buffer (struct max77696_chip *chip)
+{
+    u8 rtcupdate0;
+
+    max77696_i2c_retry_read_register(&(chip->rtc_i2c), RTC_RTCUPDATE0_REG, &rtcupdate0, __func__);
+    rtcupdate0 |= RTC_RTCUPDATE0_RBUDR_M;
+    max77696_i2c_retry_write_register(&(chip->rtc_i2c), RTC_RTCUPDATE0_REG, rtcupdate0, __func__);
+
+    udelay(200);
+}
+
+static void dump_rtc_regs (struct max77696_chip *chip)
+{
+    int i;
+    u8 regval;
+
+    max77696_rtc_sync_read_buffer(chip);
+
+    for (i=0; i<ARRAY_SIZE(rtc_registers_to_dump); i++) {
+        max77696_i2c_retry_read_register(&(chip->rtc_i2c), rtc_registers_to_dump[i], &regval, __func__);
+        rtc_reg_vals[i] = regval;
+	printk("%x:%x%s, ", rtc_registers_to_dump[i], rtc_reg_vals[i],
+			regval == rtc_reg_vals[i] ? "" : "*" );
+    }
+    printk("\n");
+
+    for (i=0; i<ARRAY_SIZE(rtc_time_registers); i++) {
+        max77696_i2c_retry_read_register(&(chip->rtc_i2c), rtc_time_registers[i], &regval, __func__);
+	printk("%x:%x, ", rtc_time_registers[i], regval);
+    }
+    printk("\n");
+}
+
+static void save_chgb_block(struct max77696_chip *chip)
+{
+    int i;
+
+    for (i=CHGB_SAVE_START; i<= CHGB_SAVE_END; i++) {
+        // Charger B is on the same i2c slave address as the RTC, so the
+        // struct max77696_chip uses the rtc i2c client for both.
+        max77696_i2c_retry_read_register(&(chip->rtc_i2c), (u8)i, chgb_saved_vals + (i-CHGB_SAVE_START), __func__);
+    }
+
+    max77696_i2c_retry_read_register(&(chip->rtc_i2c), (u8)CHGB_SAVE_EXTRA, &chgb_saved_extra, __func__);
+
+    printk(KERN_INFO "Dumping RTC regs before hibernate...");
+    dump_rtc_regs(chip);
+}
+
+static void restore_chgb_block(struct max77696_chip *chip)
+{
+    int i;
+
+    for (i=CHGB_SAVE_START; i<= CHGB_SAVE_END; i++) {
+        max77696_i2c_retry_write_register(&(chip->rtc_i2c), (u8)i, chgb_saved_vals[i-CHGB_SAVE_START], __func__);
+    }
+
+    max77696_i2c_retry_write_register(&(chip->rtc_i2c), CHGB_SAVE_EXTRA, chgb_saved_extra, __func__);
+ 
+    printk(KERN_INFO "Dumping RTC regs during resume...");
+    dump_rtc_regs(chip);
+}
+
+void max77696_save_internal_state (void)
+{
+	if (in_falcon()) {
+		/* There isn't too much interaction between the modules, so this is done in no particular order */
+		save_pmic_block(max77696);
+		save_uic_block(max77696);
+		save_chgb_block(max77696);
+	}
+}
+EXPORT_SYMBOL(max77696_save_internal_state);
+
+void max77696_restore_internal_state (void)
+{
+	if (in_falcon()) {
+		u16 status;
+		max77696_i2c_retry_read_register16(&(max77696->gauge_i2c), (u8)FG_STATUS_REG, &status, __func__);
+
+		/* check for POR bit before we restore PMIC regs, FG will be restored 
+		 * correctly in battery resume */
+		if (status & FG_STATUS_POR) {
+			printk(KERN_ERR "POR bit set during hibernate!");
+		}
+
+		restore_pmic_block(max77696);
+		restore_uic_block(max77696);
+		restore_chgb_block(max77696);
+	}
+}
+EXPORT_SYMBOL(max77696_restore_internal_state);
+#endif
+
 static int max77696_i2c_suspend (struct device *dev)
 {
-    struct i2c_client *client = to_i2c_client(dev);
-    struct max77696_chip *chip = i2c_get_clientdata(client);
+	struct i2c_client *client = to_i2c_client(dev);
+	struct max77696_chip *chip = i2c_get_clientdata(client);
 
-    disable_irq(chip->core_irq);
-    enable_irq_wake(chip->core_irq);
-    return 0;
+#ifdef CONFIG_FALCON
+    if(in_falcon()) {
+		/* Note: WS-1212 Enable LDO bandgap bias when entering FSHDN (SW workaround - option 1b) */
+		if (!lab126_board_rev_greater_eq(BOARD_ID_WHISKY_WAN_DVT1_1_REV_C) &&
+			!lab126_board_rev_greater_eq(BOARD_ID_WHISKY_WFO_DVT1_1_REV_C)) {
+			max77696_ldo_set_bias_enable(true);
+		}
+    }
+#endif
+
+	disable_irq(chip->core_irq);
+	enable_irq_wake(chip->core_irq);
+	return 0;
 }
 
 static int max77696_i2c_resume (struct device *dev)
 {
-    struct i2c_client *client = to_i2c_client(dev);
-    struct max77696_chip *chip = i2c_get_clientdata(client);
+	struct i2c_client *client = to_i2c_client(dev);
+	struct max77696_chip *chip = i2c_get_clientdata(client);
 
-    disable_irq_wake(chip->core_irq);
-    enable_irq(chip->core_irq);
-    return 0;
+	disable_irq_wake(chip->core_irq);
+	enable_irq(chip->core_irq);
+
+#ifdef CONFIG_FALCON
+    if(in_falcon()) {
+		/* Note: WS-1212 Disable LDO bandgap bias when exiting FSHDN (SW workaround - option 1b) */
+		if (!lab126_board_rev_greater_eq(BOARD_ID_WHISKY_WAN_DVT1_1_REV_C) &&
+			!lab126_board_rev_greater_eq(BOARD_ID_WHISKY_WFO_DVT1_1_REV_C)) {
+			max77696_ldo_set_bias_enable(false);
+	    }
+	}
+#endif
+	return 0;
 }
 #endif /* CONFIG_PM_SLEEP */
 

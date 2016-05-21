@@ -16,6 +16,8 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
+#define DEBUG
+#define VERBOSE
 
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -30,6 +32,7 @@
 #include <linux/rtc.h>
 #include <linux/mfd/max77696.h>
 #include <max77696_registers.h>
+#include <llog.h>
 
 #define DRIVER_DESC    "MAX77696 RTC Driver"
 #define DRIVER_AUTHOR  "Jayden Cha <jayden.cha@maxim-ic.com>"
@@ -101,6 +104,13 @@ unsigned long total_suspend_time = 0;
 EXPORT_SYMBOL(total_suspend_time);
 
 static char *dow_short[] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+
+extern int pb_oneshot;
+extern void pb_oneshot_unblock_button_events (void);
+
+#ifdef CONFIG_FALCON
+extern int in_falcon(void);
+#endif
 
 /* Convert MAX77696 RTC registers --> struct rtc_time */
 static void max77696_rtc_format_reg2time (struct max77696_rtc *me,
@@ -426,6 +436,12 @@ static int max77696_rtc_write_alarm_buf (struct max77696_rtc *me, int alrm_id,
 			goto out;
 		}
 
+		/* commit new alarm time */
+		rc = max77696_rtc_commit_write_buffer(me);
+		if (unlikely(rc)) {
+			dev_err(me->dev, "%s error commiting write buffers, %d", __func__, rc);
+		}
+
 		/* Enable alarm bits */
 		rc = max77696_write(me->i2c, alrm_en_reg, alrm_en);
 		if (unlikely(rc)) {
@@ -441,15 +457,33 @@ out:
 	return rc;
 }
 
-
 static irqreturn_t max77696_rtc_isr (int irq, void *data)
 {
 	struct max77696_rtc *me = data;
 	u8 rtc_events[2] = { 0, 0 };
-	u8 interrupted;
+	u8 interrupted, ignore;
+
+	__lock(me);
+
+	if(pb_oneshot == HIBER_SUSP) {
+		pb_oneshot = HIBER_RTC_IRQ;
+		pb_oneshot_unblock_button_events();
+	}
 
 	max77696_rtc_reg_read(me, RTCINT, &interrupted);
 	dev_dbg(me->dev, "RTCINT %02X EN %02X\n", interrupted, me->irq_unmask);
+
+	/* Do a second read of RTC interrupt to eliminate possible ClearOnRead
+	 * failed issue. We intermittently seem to hit one-off spurious alarm
+	 * interrupt case (typically getting an interrupt before alarm expires)
+	 * causing undesired side-effects - JSEVEN-4256
+	 */
+	max77696_rtc_reg_read(me, RTCINT, &ignore);
+	if(ignore) {
+		dev_err(me->dev, "RTC Clear on Read failed! RTCINT %02X\n", ignore);
+		LLOG_DEVICE_METRIC(DEVICE_METRIC_HIGH_PRIORITY, DEVICE_METRIC_TYPE_COUNTER, 
+			"kernel", "rtc", "RTCINT ClearOnRead failed", 1, "");
+	}
 
 	interrupted &= me->irq_unmask;
 
@@ -458,6 +492,52 @@ static irqreturn_t max77696_rtc_isr (int irq, void *data)
 	}
 
 	if (interrupted & RTC_RTCINT_RTCA1) {
+		int rc;
+		long delta;
+		long gracetime = 3; /* default gracetime is 3 sec */
+		struct rtc_time tm;
+		unsigned long curr_time;
+		struct rtc_wkalrm alarm;
+		unsigned long alarm_time;
+		/* Check if we have hit a valid alarm0 interrupt and print
+		 * to record abnormal cases
+		 */
+		rc = max77696_rtc_read_time_buf(me, &tm);
+		if (unlikely(rc)) {
+			dev_err(me->dev, "RTC read time buf failed [%d]", rc);
+			goto out;
+		}
+		rtc_tm_to_time(&tm, &curr_time);
+
+		rc = max77696_rtc_read_alarm_buf(me, 0, &alarm);
+		if (unlikely(rc)) {
+			dev_err(me->dev, "RTC read alarm buf failed [%d]", rc);
+			goto out;
+		}
+		rtc_tm_to_time(&(alarm.time), &alarm_time);
+
+		delta = curr_time - alarm_time;
+
+#ifdef CONFIG_FALCON
+		/* give more gracetime (in secs) for Hibernate case */
+		if(in_falcon()) gracetime = 10;
+#endif
+		/* we consider an alarm valid only if
+		 * current time is greater than or equal to the alarm expiry AND
+		 * current time less than or equal to (alarm expiry + gracetime) 
+		 */
+		if(delta >= 0 && delta <= gracetime) {
+			dev_verbose(me->dev, "This is a valid RTC Alarm0 int "
+			":current time: %lu alarm settime: %lu\n", curr_time, alarm_time);
+		} else {
+			/* outside of gracetime, we deem to have hit spurious interrupt */
+			dev_err(me->dev, "This is a spurious RTC Alarm0 int "
+			":current time: %lu Alarm settime: %lu\n", curr_time, alarm_time);
+			LLOG_DEVICE_METRIC(DEVICE_METRIC_HIGH_PRIORITY, DEVICE_METRIC_TYPE_COUNTER,
+				"kernel", "rtc", "RTC spurious interrupt", 1, "");
+			goto out;
+		}
+
 		rtc_events[0] |= RTC_AF;
 	}
 
@@ -477,6 +557,8 @@ static irqreturn_t max77696_rtc_isr (int irq, void *data)
 		rtc_update_irq(me->rtc[1], 1, RTC_IRQF | rtc_events[1]);
 	}
 
+out:
+	__unlock(me);
 	return IRQ_HANDLED;
 }
 
@@ -889,6 +971,9 @@ static __devinit int max77696_rtc_probe (struct platform_device *pdev)
 
 	/* Disable & Clear all RTC interrupts */
 	max77696_rtc_reg_write(me, RTCINTM, RTC_RTCINT_ALL);
+	max77696_rtc_reg_write(me, RTCAE1, RTC_RTCAE_NONE);
+	max77696_rtc_reg_write(me, RTCAE2, RTC_RTCAE_NONE);
+	max77696_rtc_reg_set_bit(me, RTCUPDATE0, FCUR, 1);
 	max77696_rtc_reg_read(me, RTCINT, &interrupted);
 
 	rc = request_threaded_irq(me->irq,
@@ -938,7 +1023,6 @@ static __devexit int max77696_rtc_remove (struct platform_device *pdev)
 {
 	struct max77696_rtc *me = platform_get_drvdata(pdev);
 
-
 	free_irq(me->irq, me);
 	me->rtc_master = NULL;
 
@@ -983,7 +1067,9 @@ static int max77696_rtc_resume (struct device *dev)
 	struct rtc_time tm;
 	unsigned long resume_time;
 	int rc;
-
+	long delta;
+	struct rtc_wkalrm alarm;
+	unsigned long alarm_time;
 	__lock(me);
 
 	rc = max77696_rtc_read_time_buf(me, &tm);
@@ -995,6 +1081,11 @@ static int max77696_rtc_resume (struct device *dev)
 
 	last_suspend_time = resume_time - suspend_time;
 	total_suspend_time += last_suspend_time;
+	suspend_time = 0;
+	max77696_rtc_read_alarm_buf(me, 0, &alarm);
+	rtc_tm_to_time(&(alarm.time), &alarm_time);
+	delta = alarm_time - resume_time;
+	dev_dbg(me->dev, "%s: alarm_time:%ld resume_time%ld",__func__, alarm_time, resume_time);
 
 out:
 	__unlock(me);

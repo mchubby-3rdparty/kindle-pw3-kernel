@@ -90,6 +90,7 @@ struct fsl_usb2_platform_data {
 	unsigned int			workaround;
 
 	int		(*init)(struct platform_device *);
+	void		(*late_init)(struct platform_device *);
 	void		(*exit)(struct platform_device *);
 	void __iomem	*regs;		/* ioremap'd register base */
 	struct clk	*clk;
@@ -137,6 +138,7 @@ struct fsl_usb2_platform_data {
 	void (*platform_rh_suspend)(struct fsl_usb2_platform_data *);
 	void (*platform_rh_resume)(struct fsl_usb2_platform_data *);
 	void (*platform_set_disconnect_det)(struct fsl_usb2_platform_data *, bool);
+	int (*platform_config_phy_parameters)(void);
 	void (*platform_phy_power_on)(void);
 
 	struct fsl_usb2_wakeup_platform_data *wakeup_pdata;
@@ -158,6 +160,18 @@ struct fsl_usb2_platform_data {
 	struct work_struct	dequeue_clock_wakeup_work;  /* Enable clock on urb dequeue */
 	struct urb		*queue_saved_urb;
 	unsigned int		queue_saved_arg;
+
+	atomic_t ehci_irq_last_count;
+	atomic_t ehci_irq_current_count;
+	atomic_t idle_suspended;
+	atomic_t ehci_idle_counter;
+	atomic_t ehci_idle_threshold;
+
+	int suspend_count;
+	int wakeup_value;
+	int deep_idle_enable_value;
+	int kick_off_delayed_work;
+	int in_deep_idle;
 #endif /* CONFIG_LAB126 */
 
 	/* register save area for suspend/resume */

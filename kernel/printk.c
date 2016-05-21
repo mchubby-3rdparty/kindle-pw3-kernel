@@ -45,6 +45,13 @@
 
 #include <asm/uaccess.h>
 
+
+#ifdef CONFIG_FALCON
+
+#define MAX_SBIOS_PRINT 100
+static int (**pp_bios_printk)(const char *fmt, ...);
+#endif
+
 /*
  * Architectures can override it:
  */
@@ -866,6 +873,26 @@ asmlinkage int printk(const char *fmt, ...)
 	return r;
 }
 
+#ifdef CONFIG_FALCON
+int sbios_printk(const char *fmt, ...)
+{ 
+	char *pre_fix = "[sbios]";
+	int r = 0;
+	char new[MAX_SBIOS_PRINT];
+	va_list args;
+	
+	memset(new, 0, sizeof(char) * MAX_SBIOS_PRINT);
+	strcpy(new, pre_fix);
+	strcpy(new + strlen(new), fmt);
+	
+	va_start(args, fmt);
+	r = vprintk(new, args);
+	va_end(args);
+	
+	return r;
+
+}
+#endif		
 /* cpu currently holding logbuf_lock */
 static volatile unsigned int printk_cpu = UINT_MAX;
 
@@ -1228,6 +1255,9 @@ void suspend_console(void)
 	if (!console_suspend_enabled)
 		return;
 	printk("Suspending console(s) (use no_console_suspend to debug)\n");
+#ifdef CONFIG_FALCON
+	*pp_bios_printk = NULL;
+#endif
 	console_lock();
 	console_suspended = 1;
 	up(&console_sem);
@@ -1240,6 +1270,9 @@ void resume_console(void)
 	down(&console_sem);
 	console_suspended = 0;
 	console_unlock();
+#ifdef CONFIG_FALCON
+	*pp_bios_printk = sbios_printk;
+#endif
 }
 
 /**
@@ -1695,7 +1728,7 @@ EXPORT_SYMBOL(unregister_console);
 static int __init printk_late_init(void)
 {
 	struct console *con;
-
+	
 	for_each_console(con) {
 		if (!keep_bootcon && con->flags & CON_BOOT) {
 			printk(KERN_INFO "turn off boot console %s%d\n",
@@ -1704,6 +1737,10 @@ static int __init printk_late_init(void)
 		}
 	}
 	hotcpu_notifier(console_cpu_notify, 0);
+#ifdef CONFIG_FALCON
+	pp_bios_printk = (CONFIG_FALCON_STORAGE_BIOS_ADDR + CONFIG_FALCON_STORAGE_BIOS_SIZE - 3 * sizeof(u32));
+	*pp_bios_printk = sbios_printk;
+#endif
 	return 0;
 }
 late_initcall(printk_late_init);

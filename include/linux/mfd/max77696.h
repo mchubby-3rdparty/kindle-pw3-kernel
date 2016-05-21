@@ -130,6 +130,10 @@ struct max77696_32k_platform_data {
 #define MAX77696_GPIO_OUTCFG_OPENDRAIN     0
 #define MAX77696_GPIO_OUTCFG_PUSHPULL      1
 
+/* GPIO Output drive level */
+#define MAX77696_GPIO_DO_LO                0
+#define MAX77696_GPIO_DO_HI                1
+
 /* Debounce Configuration */
 #define MAX77696_GPIO_DBNC_0_MSEC          0
 #define MAX77696_GPIO_DBNC_8_MSEC          1
@@ -311,6 +315,7 @@ enum {
 
 struct max77696_lsw_platform_data {
     struct regulator_init_data init_data[MAX77696_LSW_NR_REGS];
+    u8 ade[MAX77696_LSW_NR_REGS];
 };
 
 /* EPD Power Supplies */
@@ -350,19 +355,59 @@ enum {
 enum {
 	MAX77696_LED_OFF = 0,
 	MAX77696_LED_ON = 1,
+	MAX77696_LED_BLINK = 2,
 };
 
 #define LED_MAX_BRIGHTNESS          127
 #define LED_DEF_BRIGHTNESS          63
 #define LED_MED_BRIGHTNESS          31
 
+#define LED_FLASHD_OFF 0x0 /* off */
+#define LED_FLASHP_OFF 0xF /* on indefinitely */
+
+#define LED_FLASHD_ON  0xF /* 640ms */
+#define LED_FLASHP_ON  0x0 /* 640ms */
+
+#define LED_FLASHD_DEF 0xD /* 512ms */
+#define LED_FLASHP_DEF 0x1 /* 960ms */
+
+#define LED_FLASHD_BLINK  0xA /* 320ms */
+#define LED_FLASHP_BLINK  0x0 /* 640ms */
+
+#if defined(CONFIG_POWER_SODA)
+/* SOC battery events related defines
+ * Applicable only for Wky dual-battery
+ * architecture */
+#define SOCBATT_EVTHDL_DELAY 		500 /* 500ms delay for SOC battery Hi
+				             * and Low events handler run */
+#define IGNORE_SOCBATT_TRIGGER	   	0x11
+#define SOCBATT_MINSUBSCRIBE_TRIGGER    0x22
+#define SOCBATT_MAXSUBSCRIBE_TRIGGER   	0x33
+
+enum socbattevt_subscription_st {
+	SOCBATT_MIN_SUBSCRIBED = 0x0,
+	SOCBATT_MAX_SUBSCRIBED,
+	UNSUBSCRIBED_ALL,
+};
+
+/* Battery events structure for primary SOC Battery
+ * (applicable for Wky/Duet archictecture) */
+struct max77696_socbatt_eventdata {
+	struct delayed_work socbatt_event_work;
+	atomic_t override;
+	atomic_t subscribe_state;
+};
+#endif
+
 struct max77696_led_platform_data {
 	struct led_info info;
 	bool manual_mode;
 	u8 sol_brightness;
+	u8 init_state;
 };
 
 struct max77696_backlight_platform_data {
+	int brightness;
 };
 
 /* Analog-to-Digital Converter */
@@ -596,11 +641,17 @@ struct max77696_uic_platform_data {
 /* Enable the DC to DC converter as a boost converter */
 #define MAX77696_CHARGER_MODE_OFF_ENBOOST 0b1000
 
+/* CHARGER-A Input current limits */
+#define MAX77696_CHARGER_A_ICL_ILIM_0P08A   0x84
+#define MAX77696_CHARGER_A_ICL_ILIM_0P16A   0x88
+#define MAX77696_CHARGER_A_ICL_ILIM_0P5A    0x99
+
 struct max77696_charger_platform_data {
 	char **batteries;
 	int    num_batteries;
 
 	u8     initial_mode;
+	u8     icl_ilim;
 	int    wdt_period_ms; /* Watchdog Timer Period:   80,000 msec (fixed)
 						   * Watchdog Timer Accuracy: -20 ~ +20 %
 						   * (To disable wdt, set zero)
@@ -609,6 +660,8 @@ struct max77696_charger_platform_data {
 	int    cc_uA, cv_prm_mV, cv_jta_mV;
 	int    to_time, to_ith;
 	int    t1_C, t2_C, t3_C, t4_C;
+	int    fast_chg_time;
+	bool   chg_dc_lpm;
 	bool   wakeup_irq;
 
 	void   (*charger_notify) (struct power_supply *psy,
@@ -653,6 +706,7 @@ struct max77696_onkey_platform_data {
 	unsigned int hold_1sec_keycode;  /* Keycode for EN0_1SEC */
 	unsigned int mr_warn_keycode;    /* Keycode for MRWRN */
 };
+
 
 /*** MAX77696 PLATFORM DATA STRUCTURES ***/
 struct max77696_platform_data {
@@ -837,6 +891,10 @@ extern void max77696_led_set_blink (unsigned int led_id,
 		unsigned long duration_ms, unsigned long period_ms);
 extern void max77696_led_disable_blink (unsigned int led_id);
 
+/* @LDO */
+extern int max77696_ldo_set_bias_enable (bool enable);
+extern int max77696_ldo_get_bias_enable (void);
+
 /* @ADC */
 extern int max77696_adc_read (u8 channel, u16 *data);
 #define max77696_adc_read_buck_current(buck, data_ptr) \
@@ -913,6 +971,14 @@ enum {
 	MAX77696_TOPSYSINT_NR_IRQS,
 };
 
+enum {
+	MAX77696_GPIO_0 = MAX77696_GPIO_BASE,
+	MAX77696_GPIO_1,
+	MAX77696_GPIO_2,
+	MAX77696_GPIO_3,
+	MAX77696_GPIO_4,
+};
+
 /* PMIC fault interrupt definitions */
 #define MAX77696_EPDINTS_VCOMFLTS        BIT(6)
 #define MAX77696_EPDINTS_HVINPFLTS       BIT(5)
@@ -952,6 +1018,22 @@ enum {
 #define MAX77696_FG_INT_VMN              BIT (2)
 #define MAX77696_FG_INT_TMX              BIT (1)
 #define MAX77696_FG_INT_TMN              BIT (0)
+
+#define SYS_HI_SOC_THRESHOLD             95
+#define SYS_LO_SOC_THRESHOLD             80
+
+#define SYS_CRIT_TEMP_THRESHOLD          60
+#define SYS_HI_TEMP_THRESHOLD            45
+
+enum pb_oneshot_state{
+	NOTHING = 0,
+	ALARM_SET,
+	HIBER_SUSP,
+	HIBER_RTC_IRQ,
+	HIBER_CHG_IRQ,
+	HALL_IRQ,
+};
+
 
 /*
  *------------------------------------------------------------------------------

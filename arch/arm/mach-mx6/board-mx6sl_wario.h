@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2014 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright (c) 2012-2015 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -45,10 +45,42 @@
 #define MX6_WARIO_WDOG_B        IMX_GPIO_NR(3, 18)      /* WDOG_B */
 #define MX6_ARM2_SD3_CD         IMX_GPIO_NR(3, 22)      /* REF_CLK_32K */
 #define MX6_ARM2_PWM_BL_CTRL    IMX_GPIO_NR(3, 23)      /* PWM1 */
+#define MX6_WARIO_HALL_SNS      IMX_GPIO_NR(4, 7)       /* KEY_ROW7 */
+#define MX6SL_PIN_TOUCH_INTB    IMX_GPIO_NR(4, 3)       /* KEY_ROW5 - touch irq*/
+
+
+
+#if defined(CONFIG_MX6SL_WARIO_BASE)
+
 #define MX6_WARIO_WIFI_PWD      IMX_GPIO_NR(3, 29)      /* KEY_ROW2 */
+
+#elif defined(CONFIG_MX6SL_WARIO_WOODY)
+
+/* Wario pins related to BRCM 4343W Wifi+BT module */
+#define MX6SL_WARIO_WL_REG_ON		IMX_GPIO_NR(2, 15)	/* LCD_CLK - BT_RESET_B */
+#define MX6SL_WARIO_WL_GPIO_1           IMX_GPIO_NR(5,  8)      /* SD1_DAT1 - WIFI_GPIO_1 */
+#define MX6SL_WARIO_BT_REG_ON		IMX_GPIO_NR(2, 19)	/* LCD_RESET - BT_DISABLE */
+#define MX6SL_WARIO_BT_CLK_REQ          IMX_GPIO_NR(5,  6)	/* SD1_DAT3 */
+#define MX6SL_WARIO_BT_DEV_WAKE         IMX_GPIO_NR(5,  13)	/* SD1_DAT2 */
+#define MX6SL_WARIO_WIFI_WAKE_ON_LAN_B  IMX_GPIO_NR(3, 31)	/* KEY_ROW3 */
+#define MX6SL_WARIO_BT_HOST_WAKE        IMX_GPIO_NR(3, 29)	/* KEY_ROW2 - bt_host_wake */
+
+/* pins related to SODA interface */
+#define MX6_SODA_I2C_SCL        IMX_GPIO_NR(2, 7)			/* EPDC_PWRCTRL0 */
+#define MX6_SODA_I2C_SDA        IMX_GPIO_NR(2, 8)			/* EPDC_PWRCTRL1 */
+#define MX6_SODA_OTG_SW         IMX_GPIO_NR(2, 9)                       /* EPDC_PWRCTRL2 */
+#define MX6_SODA_I2C_SDA_PU     IMX_GPIO_NR(2, 14)			/* EPDC_PWRWAKEUP */
+#define MX6_SODA_BOOST          IMX_GPIO_NR(2, 12)                      /* EPDC_PWRINT */
+#define MX6_SODA_CHG_DET        IMX_GPIO_NR(5, 15)		        /* SD1_CLK */
+#define MX6_SODA_VBUS_ENABLE    IMX_GPIO_NR(4, 16)			/* FEC_TXD1 */
+
+#define I2C_RESET_CLK_TOGGLE_NUM         11
+#define I2C_BB_DELAY_US                  20 /* 50 KHz */
+
+#endif
+
 #define MX6_WARIO_ACCINT1       IMX_GPIO_NR(4, 4)       /* KEY_COL6 */
 #define MX6_WARIO_ACCINT2       IMX_GPIO_NR(4, 6)       /* KEY_COL7 */
-#define MX6_WARIO_HALL_SNS      IMX_GPIO_NR(4, 7)       /* KEY_ROW7 */
 #define MX6_ARM2_ECSPI1_CS0     IMX_GPIO_NR(4, 11)      /* ECSPI1_SS0 */
 #define MX6_WARIO_PROX_INT      IMX_GPIO_NR(4, 12)      /* ECSPI2_SCLK */
 #define MX6_WARIO_PROX_RST      IMX_GPIO_NR(4, 13)      /* ECSPI2_MOSI */
@@ -78,23 +110,38 @@
 #define MX6SL_SD2_DAT7             IMX_GPIO_NR(5,0)
 
 /* Touch pins */
-#define MX6SL_PIN_TOUCH_INTB    IMX_GPIO_NR(4, 3)        /* KEY_ROW5 - touch irq */
 #define MX6SL_PIN_TOUCH_RST     IMX_GPIO_NR(4, 5)        /* KEY_ROW6 - touch reset */
 #define MX6SL_PIN_TOUCH_SWDL    IMX_GPIO_NR(3, 24)       /* KEY_COL0 - SWDIO touch host side 
 							  * program pin, used on Zforce2 */
 #define MX6SL_PIN_TOUCH_UART_TX IMX_GPIO_NR(5, 9)        /* SD1_DAT5 - BSL_RX on Zforce2 */
 #define MX6SL_PIN_TOUCH_UART_RX IMX_GPIO_NR(5, 12)       /* SD1_DAT4 - BSL_TX on ZForce2 */
 
-
+/* Wario pins related to BRCM 4343W Wifi+BT module */
+#define MX6SL_WARIO_WL_REG_ON		IMX_GPIO_NR(2, 15)	/* LCD_CLK - BT_RESET_B */
+#define MX6SL_WARIO_BT_REG_ON		IMX_GPIO_NR(2, 19)	/* LCD_RESET - BT_DISABLE */
+#define MX6SL_WARIO_BT_CLK_REQ   	IMX_GPIO_NR(5,  6)	/* SD1_DAT3 */
+#define MX6SL_WARIO_BT_DEV_WAKE   	IMX_GPIO_NR(5,  13)	/* SD1_DAT2 */
+#define MX6SL_WARIO_WIFI_WAKE_ON_LAN_B 	IMX_GPIO_NR(3, 31)	/* KEY_ROW3 */
+#define MX6SL_WARIO_BT_HOST_WAKE      	IMX_GPIO_NR(3, 29)	/* KEY_ROW2 - bt_host_wake */
 /* GPIO PINs related to modem */
-#define MX6_WAN_GPIO1           IMX_GPIO_NR(3, 28)      /* KEY_COL2 */
-#define MX6_WAN_FW_READY        IMX_GPIO_NR(3, 30)      /* KEY_COL3 */
-#define MX6_WAN_SHUTDOWN        IMX_GPIO_NR(4, 0)       /* KEY_COL4 */
-#define MX6_WAN_ON_OFF          IMX_GPIO_NR(4, 2)       /* KEY_COL5 */
-#define MX6_WAN_HMI             IMX_GPIO_NR(4, 16)      /* FEC_TXD1 */
-#define MX6_WAN_USB_EN          IMX_GPIO_NR(4, 22)      /* FEC_TX_EN */
-#define MX6_WAN_MHI             IMX_GPIO_NR(4, 26)      /* FEC_REF_CLK */
-#define MX6_WAN_HOST_WAKE       IMX_GPIO_NR(4, 1)       /* KEY_ROW4 */
+
+#if defined(CONFIG_MX6SL_WARIO_WOODY)
+#define MX6SL_WARIO_3GM_POWER_ON        IMX_GPIO_NR(2, 10)    /* EPDC_PWRCTRL3 - 3GM_POWER_ON */
+#define MX6SL_WARIO_3GM_FW_READY        IMX_GPIO_NR(3, 30)    /* KEY_COL3 */
+#define MX6SL_WARIO_3GM_DL_KEY          IMX_GPIO_NR(4, 2)     /* KEY_COL5 */
+#define MX6SL_WARIO_3GM_WAKEUP_MDM      IMX_GPIO_NR(4, 26)    /* FEC_REF_CLK */
+#define MX6SL_WARIO_3GM_WAKEUP_AP       IMX_GPIO_NR(4, 1)     /* KEY_ROW4 */
+#define MX6SL_WARIO_3GM_SAR_DET         IMX_GPIO_NR(3, 28)    /* KEY_COL2 */
+#elif defined(CONFIG_MX6SL_WARIO_BASE)
+#define MX6_WAN_GPIO1                   IMX_GPIO_NR(3, 28)    /* KEY_COL2 */
+#define MX6_WAN_FW_READY                IMX_GPIO_NR(3, 30)    /* KEY_COL3 */
+#define MX6_WAN_SHUTDOWN                IMX_GPIO_NR(4, 0)     /* KEY_COL4 */
+#define MX6_WAN_ON_OFF                  IMX_GPIO_NR(4, 2)     /* KEY_COL5 */
+#define MX6_WAN_HMI                     IMX_GPIO_NR(4, 16)    /* FEC_TXD1 */
+#define MX6_WAN_USB_EN                  IMX_GPIO_NR(4, 22)    /* FEC_TX_EN */
+#define MX6_WAN_MHI                     IMX_GPIO_NR(4, 26)    /* FEC_REF_CLK */
+#define MX6_WAN_HOST_WAKE               IMX_GPIO_NR(4, 1)     /* KEY_ROW4 */
+#endif
 
 #define MX6_WARIO_TOUCH_3V2     IMX_GPIO_NR(5, 7)       /*SD1_DAT6*/
 #define MX6_WARIO_TOUCH_1V8     IMX_GPIO_NR(5, 10)      /*SD1_DAT7*/
@@ -155,5 +202,10 @@
 	 PAD_CTL_SRE_SLOW)
 
 #define MX6SL_HALL_SNS(x)	IOMUX_PAD(0x04B0, 0x01A8, 0x5, 0x0000, 0, HALL_SNS_##x##_PAD_CTRL)
+
+#if defined(CONFIG_INPUT_SX9500) || defined(CONFIG_INPUT_SX9500_MODULE)
+/* IO Used for NIRQ */
+#define GPIO_SX9500_NIRQ MX6_WARIO_PROX_INT
+#endif
 
 #endif /* __BOARD_MX6SL_WARIO_H__ */

@@ -2395,6 +2395,7 @@ int usb_port_suspend(struct usb_device *udev, pm_message_t msg)
 	 * we don't explicitly enable it here.
 	 */
 	if (udev->do_remote_wakeup) {
+#if !defined(CONFIG_MX6SL_WARIO_WOODY)
 		status = usb_control_msg(udev, usb_sndctrlpipe(udev, 0),
 				USB_REQ_SET_FEATURE, USB_RECIP_DEVICE,
 				USB_DEVICE_REMOTE_WAKEUP, 0,
@@ -2407,6 +2408,7 @@ int usb_port_suspend(struct usb_device *udev, pm_message_t msg)
 			if (msg.event & PM_EVENT_AUTO)
 				return status;
 		}
+#endif
 	}
 
 	/* see 7.1.7.6 */

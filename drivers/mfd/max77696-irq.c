@@ -37,6 +37,10 @@
 #define DRIVER_NAME    MAX77696_IRQ_NAME
 #define DRIVER_VERSION MAX77696_DRIVER_VERSION".0"
 
+#ifdef CONFIG_FALCON
+extern int in_falcon(void);
+#endif
+
 #ifdef VERBOSE
 #define dev_noise(args...) dev_dbg(args)
 #else /* VERBOSE */
@@ -347,6 +351,14 @@ static irqreturn_t max77696_irq_thread (int irq, void *data)
         dev_dbg(me->dev, "top_int status[%d] %02X\n", i, me->grp_status[i]);
     }
 #endif /* DEBUG */
+
+#if defined(CONFIG_FALCON) && !defined(DEBUG)
+	if(in_falcon()){
+		for (i = 0; i < NR_ROOT_GRP; i++) {
+			printk(KERN_DEBUG "top_int status[%d] %02X\n", i, me->grp_status[i]);
+		}
+	}
+#endif
 
     /* Check IRQ bits */
     for (i = 0; i < NR_ROOT_IRQ; i++) {

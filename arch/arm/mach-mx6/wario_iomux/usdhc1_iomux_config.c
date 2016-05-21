@@ -10,6 +10,7 @@
 #include <asm/io.h>
 #include "include/iomux_define.h"
 #include "include/iomux_register.h"
+#include <mach/boardid.h>
 
 // Function to config iomux for instance usdhc1.
 void usdhc1_iomux_config(void)
@@ -30,7 +31,10 @@ void usdhc1_iomux_config(void)
     //                NOTE: - Config Register IOMUXC_KPP_IPP_IND_COL_0_SELECT_INPUT for mode ALT2.
     //     ALT3 (3) - Select mux mode: ALT3 mux port: SDCE[4] of instance: epdc.
     //     ALT5 (5) - Select mux mode: ALT5 mux port: GPIO[15] of instance: gpio5.
-    __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), IOMUXC_SW_MUX_CTL_PAD_SD1_CLK);
+    if(!lab126_board_is(BOARD_ID_WHISKY_WFO) &&
+	   !lab126_board_is(BOARD_ID_WHISKY_WAN) &&
+	   !lab126_board_is(BOARD_ID_WOODY)) 
+       __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), IOMUXC_SW_MUX_CTL_PAD_SD1_CLK);
     // Pad Control Register:
     // IOMUXC_SW_PAD_CTL_PAD_SD1_CLK(0x020E0534)
     //   LVE (22) - Low Voltage Enable Field Reset: LVE_DISABLED
@@ -79,7 +83,10 @@ void usdhc1_iomux_config(void)
     //             Select one out of next values for pad: SD1_CLK.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_22KOHM_PU & 0x3) << 14 |
+    if(!lab126_board_is(BOARD_ID_WHISKY_WFO) &&
+	   !lab126_board_is(BOARD_ID_WHISKY_WAN) &&
+	   !lab126_board_is(BOARD_ID_WOODY)) 
+       __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_22KOHM_PU & 0x3) << 14 |
            (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
            (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_FAST & 0x1), IOMUXC_SW_PAD_CTL_PAD_SD1_CLK);
 
@@ -99,7 +106,12 @@ void usdhc1_iomux_config(void)
     //                NOTE: - Config Register IOMUXC_KPP_IPP_IND_ROW_0_SELECT_INPUT for mode ALT2.
     //     ALT3 (3) - Select mux mode: ALT3 mux port: SDCE[5] of instance: epdc.
     //     ALT5 (5) - Select mux mode: ALT5 mux port: GPIO[14] of instance: gpio5.
-    __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), IOMUXC_SW_MUX_CTL_PAD_SD1_CMD);
+    if(!lab126_board_is(BOARD_ID_WHISKY_WFO) &&
+       !lab126_board_is(BOARD_ID_WHISKY_WAN) &&
+       !lab126_board_is(BOARD_ID_WOODY)) {
+        __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), IOMUXC_SW_MUX_CTL_PAD_SD1_CMD);
+    }
+
     // Pad Control Register:
     // IOMUXC_SW_PAD_CTL_PAD_SD1_CMD(0x020E0538)
     //   LVE (22) - Low Voltage Enable Field Reset: LVE_DISABLED
@@ -148,9 +160,13 @@ void usdhc1_iomux_config(void)
     //             Select one out of next values for pad: SD1_CMD.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_22KOHM_PU & 0x3) << 14 |
-           (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
-           (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_FAST & 0x1), IOMUXC_SW_PAD_CTL_PAD_SD1_CMD);
+    if(!lab126_board_is(BOARD_ID_WHISKY_WFO) &&
+       !lab126_board_is(BOARD_ID_WHISKY_WAN) &&
+       !lab126_board_is(BOARD_ID_WOODY)) {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_22KOHM_PU & 0x3) << 14 |
+               (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+               (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_FAST & 0x1), IOMUXC_SW_PAD_CTL_PAD_SD1_CMD);
+    }
 
     // Config usdhc1.DAT0 to pad SD1_DAT0(B23)
     // Mux Register:
@@ -168,7 +184,12 @@ void usdhc1_iomux_config(void)
     //                NOTE: - Config Register IOMUXC_KPP_IPP_IND_COL_1_SELECT_INPUT for mode ALT2.
     //     ALT3 (3) - Select mux mode: ALT3 mux port: SDCE[6] of instance: epdc.
     //     ALT5 (5) - Select mux mode: ALT5 mux port: GPIO[11] of instance: gpio5.
-    __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), IOMUXC_SW_MUX_CTL_PAD_SD1_DAT0);
+    if(!lab126_board_is(BOARD_ID_WHISKY_WFO) &&
+       !lab126_board_is(BOARD_ID_WHISKY_WAN) &&
+       !lab126_board_is(BOARD_ID_WOODY)) {
+        __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), IOMUXC_SW_MUX_CTL_PAD_SD1_DAT0);
+    }
+
     // Pad Control Register:
     // IOMUXC_SW_PAD_CTL_PAD_SD1_DAT0(0x020E053C)
     //   LVE (22) - Low Voltage Enable Field Reset: LVE_DISABLED
@@ -217,9 +238,13 @@ void usdhc1_iomux_config(void)
     //             Select one out of next values for pad: SD1_DAT0.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_22KOHM_PU & 0x3) << 14 |
-           (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
-           (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_FAST & 0x1), IOMUXC_SW_PAD_CTL_PAD_SD1_DAT0);
+    if(!lab126_board_is(BOARD_ID_WHISKY_WFO) &&
+       !lab126_board_is(BOARD_ID_WHISKY_WAN) &&
+       !lab126_board_is(BOARD_ID_WOODY)) {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_22KOHM_PU & 0x3) << 14 |
+               (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+               (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_FAST & 0x1), IOMUXC_SW_PAD_CTL_PAD_SD1_DAT0);
+    }
 
     // Config usdhc1.DAT1 to pad SD1_DAT1(A23)
     // Mux Register:
@@ -237,7 +262,10 @@ void usdhc1_iomux_config(void)
     //                NOTE: - Config Register IOMUXC_KPP_IPP_IND_ROW_1_SELECT_INPUT for mode ALT2.
     //     ALT3 (3) - Select mux mode: ALT3 mux port: SDCE[7] of instance: epdc.
     //     ALT5 (5) - Select mux mode: ALT5 mux port: GPIO[8] of instance: gpio5.
-    __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), IOMUXC_SW_MUX_CTL_PAD_SD1_DAT1);
+    if(!lab126_board_is(BOARD_ID_WHISKY_WFO) &&
+	   !lab126_board_is(BOARD_ID_WHISKY_WAN) &&
+	   !lab126_board_is(BOARD_ID_WOODY)) 
+       __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), IOMUXC_SW_MUX_CTL_PAD_SD1_DAT1);
     // Pad Control Register:
     // IOMUXC_SW_PAD_CTL_PAD_SD1_DAT1(0x020E0540)
     //   LVE (22) - Low Voltage Enable Field Reset: LVE_DISABLED
@@ -286,10 +314,13 @@ void usdhc1_iomux_config(void)
     //             Select one out of next values for pad: SD1_DAT1.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_22KOHM_PU & 0x3) << 14 |
+    if(!lab126_board_is(BOARD_ID_WHISKY_WFO) &&
+	   !lab126_board_is(BOARD_ID_WHISKY_WAN) &&
+	   !lab126_board_is(BOARD_ID_WOODY)) 
+       __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_22KOHM_PU & 0x3) << 14 |
            (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
            (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_FAST & 0x1), IOMUXC_SW_PAD_CTL_PAD_SD1_DAT1);
-
+    
     // Config usdhc1.DAT2 to pad SD1_DAT2(C22)
     // Mux Register:
     // IOMUXC_SW_MUX_CTL_PAD_SD1_DAT2(0x020E023C)
@@ -306,7 +337,13 @@ void usdhc1_iomux_config(void)
     //                NOTE: - Config Register IOMUXC_KPP_IPP_IND_COL_2_SELECT_INPUT for mode ALT2.
     //     ALT3 (3) - Select mux mode: ALT3 mux port: SDCE[8] of instance: epdc.
     //     ALT5 (5) - Select mux mode: ALT5 mux port: GPIO[13] of instance: gpio5.
-    __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), IOMUXC_SW_MUX_CTL_PAD_SD1_DAT2);
+    if(lab126_board_is(BOARD_ID_WHISKY_WFO) ||
+	    lab126_board_is(BOARD_ID_WHISKY_WAN) ||
+	    lab126_board_is(BOARD_ID_WOODY)) {
+        __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT5 & 0x7), IOMUXC_SW_MUX_CTL_PAD_SD1_DAT2);
+    } else {
+        __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), IOMUXC_SW_MUX_CTL_PAD_SD1_DAT2);
+    }
     // Pad Control Register:
     // IOMUXC_SW_PAD_CTL_PAD_SD1_DAT2(0x020E0544)
     //   LVE (22) - Low Voltage Enable Field Reset: LVE_DISABLED
@@ -374,7 +411,13 @@ void usdhc1_iomux_config(void)
     //                NOTE: - Config Register IOMUXC_KPP_IPP_IND_ROW_2_SELECT_INPUT for mode ALT2.
     //     ALT3 (3) - Select mux mode: ALT3 mux port: SDCE[9] of instance: epdc.
     //     ALT5 (5) - Select mux mode: ALT5 mux port: GPIO[6] of instance: gpio5.
-    __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), IOMUXC_SW_MUX_CTL_PAD_SD1_DAT3);
+    if(lab126_board_is(BOARD_ID_WHISKY_WFO) ||
+	    lab126_board_is(BOARD_ID_WHISKY_WAN) ||
+	    lab126_board_is(BOARD_ID_WOODY)) {
+        __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT5 & 0x7), IOMUXC_SW_MUX_CTL_PAD_SD1_DAT3);
+    } else {
+        __raw_writel((SION_DISABLED & 0x1) << 4 | (ALT0 & 0x7), IOMUXC_SW_MUX_CTL_PAD_SD1_DAT3);
+    }
     // Pad Control Register:
     // IOMUXC_SW_PAD_CTL_PAD_SD1_DAT3(0x020E0548)
     //   LVE (22) - Low Voltage Enable Field Reset: LVE_DISABLED
@@ -423,7 +466,15 @@ void usdhc1_iomux_config(void)
     //             Select one out of next values for pad: SD1_DAT3.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_22KOHM_PU & 0x3) << 14 |
+    if(lab126_board_is(BOARD_ID_WHISKY_WFO) ||
+	    lab126_board_is(BOARD_ID_WHISKY_WAN) ||
+	    lab126_board_is(BOARD_ID_WOODY)) {
+    	__raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+           (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+           (SPD_50MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_SD1_DAT3);
+    	} else {
+    	__raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_22KOHM_PU & 0x3) << 14 |
            (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
            (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_FAST & 0x1), IOMUXC_SW_PAD_CTL_PAD_SD1_DAT3);
+    	}
 }

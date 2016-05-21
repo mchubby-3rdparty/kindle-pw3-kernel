@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2014 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * Copyright (c) 2012-2015 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -41,14 +41,26 @@
 #include <linux/regulator/fixed.h>
 #include <linux/mfd/max77696.h>
 #include <linux/mfd/max77696-events.h>
-#include <linux/lis3dh_acc_misc.h>
+#include <linux/power/soda.h>
 #include <linux/mmc/sdhci.h>
+#include <linux/frontlight.h>
+#include <net/bluetooth/bt_pwr_ctrl.h>
 #include <mach/boardid.h>
 #include "board-mx6sl_wario.h"
 #include <mach/system.h>
 
 extern void emmc_power_gate_pins(int on);
 extern void init_emmc_power_gate_pins(void);
+
+#if defined(CONFIG_INPUT_SX9500) || defined(CONFIG_INPUT_SX9500_MODULE)
+#include <linux/input/smtc/misc/sx9500-specifics.h>
+#endif
+
+#define HW_SUPPORT_EMMC_POWER_GATE  (lab126_board_is(BOARD_ID_MUSCAT_WFO) || \
+                                      lab126_board_is(BOARD_ID_MUSCAT_WAN) || \
+                                      lab126_board_is(BOARD_ID_WHISKY_WAN) || \
+                                      lab126_board_is(BOARD_ID_WHISKY_WFO))
+
 
 struct clk *extern_audio_root;
 
@@ -57,12 +69,26 @@ extern char *soc_reg_id;
 extern char *pu_reg_id;
 extern void mx6_cpu_regulator_init(void);
 extern void iomux_config(void);
+#if defined(CONFIG_MX6SL_WARIO_BASE)
 extern void gpio_wifi_power_enable(int enable);
-extern void gpio_wan_ldo_fet_init(void);
-extern void wan_request_gpio(void);
+#endif
+
 extern void wan_free_gpio(void);
 extern void gpio_wan_power(int enable);
+#if defined(CONFIG_MX6SL_WARIO_WOODY)
+extern int whistler_wan_request_gpio(void);
+#elif defined(CONFIG_MX6SL_WARIO_BASE)
+extern void gpio_wan_ldo_fet_init(void);
+extern void wan_request_gpio(void);
+#endif
 extern u32 enable_ldo_mode;
+
+#if defined(CONFIG_MX6SL_WARIO_WOODY)
+extern void brcm_gpio_wifi_power_enable(int enable);
+extern void brcm_gpio_bt_power_enable(int enable);
+extern void brcm_gpio_wifi_set_normal_mode(int enable);
+extern int brcm_gpio_wifi_bt_init(void);
+#endif
 
 #ifdef CONFIG_WARIO_SDCARD
 static const struct esdhc_platform_data mx6_arm2_sd1_data __initconst = {
@@ -87,7 +113,33 @@ static const struct esdhc_platform_data mx6_arm2_sd3_data __initconst = {
 	.delay_line		= 0,
 	.clk_powerdown_delay	= 1,
 };
+#if defined(CONFIG_MX6SL_WARIO_WOODY)
+/* Broadcom 4343W Bluetooth structures */
 
+/* UART platform data 4343W Bluetooth - Enable RTS/CTS and DMA */
+static const struct imxuart_platform_data mx6sl_wario_uart3_data __initconst = {
+	.flags      = IMXUART_HAVE_RTSCTS,
+	.dma_req_rx = MX6Q_DMA_REQ_UART3_RX,
+	.dma_req_tx = MX6Q_DMA_REQ_UART3_TX,
+};
+
+/* Board platform data for Bluetooth */
+/* GPIOs are filled here -- others will be filled in hci platform init */
+struct bt_pwr_data brcm_btpwr_data = {
+	.bt_rst       = MX6SL_WARIO_BT_REG_ON,
+	.bt_host_wake = MX6SL_WARIO_BT_HOST_WAKE,
+	.bt_dev_wake  = MX6SL_WARIO_BT_DEV_WAKE,
+	.uart_pdev    = NULL,
+};
+
+static struct platform_device wario_bt_pwr_device = {
+	.name   = "bt_pwr_ctrl",
+	.id	= 0,
+	.dev	= {
+			.platform_data = &brcm_btpwr_data,
+		},
+};
+#endif
 /* This is a hack.  Ideally we would read the value of the WIFI_PWD GPIO
    to see if it is on before suspend and only turn wifi on after resume
    if so.  But gpio_get_value() doesn't work on the 1.8V GPIOs for some
@@ -96,25 +148,14 @@ static int wifi_powered = 0;
 
 static void wario_suspend_enter(void)
 {
-	/* Turn off wifi chip before entering suspend */
-	if (wifi_powered) {
-		gpio_wifi_power_enable(0);
-	}
-	
-	if(lab126_board_is(BOARD_ID_MUSCAT_WFO) || lab126_board_is(BOARD_ID_MUSCAT_WAN))
+	if(HW_SUPPORT_EMMC_POWER_GATE)
 		emmc_power_gate_pins(0);
 }
 
 static void wario_suspend_exit(void)
 {
-	if(lab126_board_is(BOARD_ID_MUSCAT_WFO) || lab126_board_is(BOARD_ID_MUSCAT_WAN)) 
+	if(HW_SUPPORT_EMMC_POWER_GATE) 
 		emmc_power_gate_pins(1);
-
-	/* Turn on wifi if it was powered off on suspend */
-	if (wifi_powered) {
-		gpio_wifi_power_enable(1);
-		mdelay(100);
-	}
 }
 
 static const struct pm_platform_data mx6_wario_pm_data __initconst = {
@@ -181,7 +222,8 @@ static const struct pm_platform_data mx6_wario_pm_data __initconst = {
 		.consumer_supplies = MAX77696_VREG_CONSUMERS_NAME(_id),\
 		.supply_regulator = _supply_regulator,\
 	}
-#define MAX77696_LSW_INIT(_id, _name, _boot_on, _always_on, _supply_regulator)\
+#define MAX77696_LSW_INIT(_id, _name, _boot_on, _always_on, _supply_regulator, _active_discharge)\
+	.ade[MAX77696_LSW_ID_##_id] = _active_discharge,\
 	.init_data[MAX77696_LSW_ID_##_id] = {\
 		.constraints = {\
 			.valid_modes_mask   = 0,\
@@ -266,6 +308,7 @@ MAX77696_VREG_CONSUMERS(L10) = {
 };
 
 /* LSW Consumers */
+#if defined(CONFIG_MX6SL_WARIO_BASE)
 MAX77696_VREG_CONSUMERS(LSW1) = {
 };
 MAX77696_VREG_CONSUMERS(LSW2) = {
@@ -273,8 +316,31 @@ MAX77696_VREG_CONSUMERS(LSW2) = {
 MAX77696_VREG_CONSUMERS(LSW3) = {
 };
 MAX77696_VREG_CONSUMERS(LSW4) = {
-	REGULATOR_SUPPLY("DISP_3V2",            NULL),
+	REGULATOR_SUPPLY("DISP_GATED-old",            NULL),
 };
+#elif defined(CONFIG_MX6SL_WARIO_WOODY)
+MAX77696_VREG_CONSUMERS(LSW1) = {
+	REGULATOR_SUPPLY("DISP_GATED",            NULL),
+};
+MAX77696_VREG_CONSUMERS(LSW2) = {
+	REGULATOR_SUPPLY("TOUCH_VDDD",            NULL),
+};
+MAX77696_VREG_CONSUMERS(LSW3) = {
+	REGULATOR_SUPPLY("TOUCH_VDDA",            NULL),
+};
+MAX77696_VREG_CONSUMERS(LSW4) = {
+	REGULATOR_SUPPLY("DISP_GATED-old",            NULL),
+};
+#else
+MAX77696_VREG_CONSUMERS(LSW1) = {
+};
+MAX77696_VREG_CONSUMERS(LSW2) = {
+};
+MAX77696_VREG_CONSUMERS(LSW3) = {
+};
+MAX77696_VREG_CONSUMERS(LSW4) = {
+};
+#endif
 
 /* VDDQ Consumer */
 MAX77696_VREG_CONSUMERS(VDDQ) = {
@@ -393,7 +459,6 @@ static struct max77696_platform_data max77696_pdata = {
 #endif /* CONFIG_WATCHDOG_MAX77696 */
 
 #ifdef CONFIG_RTC_DRV_MAX77696
-	/* TODO: VJ to chk later */
 	.rtc_pdata = {
 		.irq_1m = 0,
 		.irq_1s = 0,
@@ -432,17 +497,27 @@ static struct max77696_platform_data max77696_pdata = {
                  */
 		MAX77696_BUCK_INIT(B6,    "max77696_buck6",     600000, 3387500, 0, 0,     0,                        0, REGULATOR_MODE_NORMAL),
         },
+#if defined(CONFIG_MX6SL_WARIO_WOODY)
         .lsw_pdata = {
-		/*                id    name             boot_on  always_on  supply_regulator
+		/*                id    name             boot_on  always_on  supply_regulator active_discharge
+		                  -------------------------------------------------------------------------------*/
+                MAX77696_LSW_INIT(LSW1, "max77696_lsw1", 0,       0,         NULL,    1),
+                MAX77696_LSW_INIT(LSW2, "max77696_lsw2", 0,       0,         NULL,    1),
+                MAX77696_LSW_INIT(LSW3, "max77696_lsw3", 0,       0,         NULL,    1),
+                MAX77696_LSW_INIT(LSW4, "max77696_lsw4", 0,       0,         NULL,    0),
+#else
+        .lsw_pdata = {
+		/*                id    name             boot_on  always_on  supply_regulator active_discharge
 		                  -----------------------------------------------*/
-                MAX77696_LSW_INIT(LSW1, "max77696_lsw1", 0,       0,         NULL),
-                MAX77696_LSW_INIT(LSW2, "max77696_lsw2", 0,       0,         NULL),
-                MAX77696_LSW_INIT(LSW3, "max77696_lsw3", 0,       0,         NULL),
-                MAX77696_LSW_INIT(LSW4, "max77696_lsw4", 0,       0,         NULL),
+                MAX77696_LSW_INIT(LSW1, "max77696_lsw1", 0,       0,         NULL,    1),
+                MAX77696_LSW_INIT(LSW2, "max77696_lsw2", 0,       0,         NULL,    1),
+                MAX77696_LSW_INIT(LSW3, "max77696_lsw3", 0,       0,         NULL,    0),
+                MAX77696_LSW_INIT(LSW4, "max77696_lsw4", 0,       0,         NULL,    1),
+#endif
 	},
 	.vddq_pdata = {
                 #define VDDQIN 1200000
-		.vddq_in_uV = VDDQIN,   /* TODO: VJ to chk later 1.2V */
+		.vddq_in_uV = VDDQIN,
 	},
         .vddq_pdata = {
                 .vddq_in_uV = VDDQIN,
@@ -468,18 +543,24 @@ static struct max77696_platform_data max77696_pdata = {
 				.name = MAX77696_LEDS_NAME".0"
 			},
 			.sol_brightness = LED_DEF_BRIGHTNESS,		/* default 0x3F */
+			.manual_mode = false,
+			.init_state = LED_FLASHD_DEF,
 		},
 		[1] = {
 			.info = {
 				.name = MAX77696_LEDS_NAME".1"
 			},
 			.sol_brightness = LED_DEF_BRIGHTNESS,		/* default 0x3F */
+			.manual_mode = false,
+			.init_state = LED_FLASHD_DEF,
 		},
 	},
 #endif /* CONFIG_LEDS_MAX77696 */
 
 #ifdef CONFIG_BACKLIGHT_MAX77696
-	/* no pdata */
+	.bl_pdata = {
+		.brightness = WARIO_FL_LEVEL12_MID,
+	},
 #endif /* CONFIG_BACKLIGHT_MAX77696 */
 
 #ifdef CONFIG_SENSORS_MAX77696
@@ -508,16 +589,16 @@ static struct max77696_platform_data max77696_pdata = {
 		.update_interval_ms                = 30000,
 		.update_interval_relax_ms          = 3600000,
 		.polling_properties                = (MAX77696_GAUGE_POLLING_CAPACITY |
-		                                      MAX77696_GAUGE_POLLING_TEMP |
-		                                      MAX77696_GAUGE_POLLING_VOLTAGE |
-		                                      MAX77696_GAUGE_POLLING_CURRENT_AVG |
-		                                      MAX77696_GAUGE_POLLING_NAC |
-		                                      MAX77696_GAUGE_POLLING_LMD |
-		                                      MAX77696_GAUGE_POLLING_CYCLE |
-		                                      MAX77696_GAUGE_POLLING_NAC_AVG |
-		                                      MAX77696_GAUGE_POLLING_NAC_MIX |
-		                                      MAX77696_GAUGE_POLLING_CAPACITY_AVG |
-		                                      MAX77696_GAUGE_POLLING_CAPACITY_MIX),
+											  MAX77696_GAUGE_POLLING_TEMP |
+											  MAX77696_GAUGE_POLLING_VOLTAGE |
+											  MAX77696_GAUGE_POLLING_CURRENT_AVG |
+											  MAX77696_GAUGE_POLLING_NAC |
+											  MAX77696_GAUGE_POLLING_LMD |
+											  MAX77696_GAUGE_POLLING_CYCLE |
+											  MAX77696_GAUGE_POLLING_NAC_AVG |
+											  MAX77696_GAUGE_POLLING_NAC_MIX |
+											  MAX77696_GAUGE_POLLING_CAPACITY_AVG |
+											  MAX77696_GAUGE_POLLING_CAPACITY_MIX),
 
 #if 0
 		.init_data                         = max77696_gauge_init_data,
@@ -542,12 +623,15 @@ static struct max77696_platform_data max77696_pdata = {
 		.cc_uA           = 466000,/*466mA default */
 		.cv_prm_mV       = 4200,  /* 4.2V device default */
 		.cv_jta_mV       = 4000,  /* 4.0V device default */
+		.fast_chg_time   = 10,    /* Fast Charge timer duration 10hrs */
 		.to_time         = 20,	  /* Top-off time 20 minutes */
 		.to_ith          = 75000, /* Top-off i threshold 75mA */
 		.t1_C            = 0,     /* device default */
 		.t2_C            = 15,    /* device default */
 		.t3_C            = 44,    /* device default */
 		.t4_C            = 54,    /* device default */
+		.chg_dc_lpm      = false, /* dc-dc low power mode */
+		.icl_ilim        = MAX77696_CHARGER_A_ICL_ILIM_0P5A,	/* default 500mA */
 		.wakeup_irq      = 0,
 		.charger_notify  = max77696_charger_notify_def_cb,
 	},
@@ -574,20 +658,6 @@ static struct max77696_platform_data max77696_pdata = {
 
 #endif /* CONFIG_MFD_MAX77696 */
 
-static struct lis3dh_acc_platform_data lis3dh_data = {
-	.poll_interval = 100, //TODO what should be ideal value?
-	.min_interval = 100,
-	.g_range = LIS3DH_ACC_G_2G,
-	.axis_map_x = 0,
-	.axis_map_y = 1,
-	.axis_map_z = 2,
-	.negate_x = 0,
-	.negate_y = 0,
-	.negate_z = 0,
-	.gpio_int1 = gpio_to_irq(MX6_WARIO_ACCINT1),
-	.gpio_int2 = gpio_to_irq(MX6_WARIO_ACCINT2),
-};
-
 #ifdef CONFIG_WARIO_HALL
 static struct hall_platform_data mx6sl_wario_hall_platform_data = {
 	.hall_gpio = MX6_WARIO_HALL_SNS,
@@ -601,6 +671,30 @@ static struct platform_device mx6sl_wario_hall_device = {
 	.id     = -1,
 	.dev    = {
 		.platform_data = &mx6sl_wario_hall_platform_data,
+	},
+};
+#endif
+
+#ifdef CONFIG_POWER_SODA
+static struct soda_platform_data mx6sl_wario_soda_platform_data = {
+	.scl_gpio = MX6_SODA_I2C_SCL,
+	.sda_gpio = MX6_SODA_I2C_SDA,
+	.i2c_bb_delay = I2C_BB_DELAY_US,
+	.soda_sda_dock_irq = gpio_to_irq(MX6_SODA_I2C_SDA),
+	.i2c_sda_pu_gpio = MX6_SODA_I2C_SDA_PU,
+	.boost_ctrl_gpio = MX6_SODA_BOOST,
+	.ext_chg_gpio = MX6_SODA_CHG_DET,
+	.ext_chg_irq = gpio_to_irq(MX6_SODA_CHG_DET),
+	.vbus_en_gpio = MX6_SODA_VBUS_ENABLE,
+	.otg_sw_gpio = MX6_SODA_OTG_SW, //this is going to be changed somewhere down in this file
+	.update_interval_ms = 10000,	
+};
+
+static struct platform_device mx6sl_wario_soda_device = {
+	.name   = "soda",
+	.id     = -1,
+	.dev    = {
+		.platform_data = &mx6sl_wario_soda_platform_data,
 	},
 };
 #endif
@@ -686,15 +780,21 @@ static struct i2c_board_info mxc_i2c2_board_info[] __initdata = {
 		/* Wario ALS MAX44009 */
 		I2C_BOARD_INFO("max44009_als", 0x4A)
 	},
-	{
-		/* Wario accelerometer */
-		I2C_BOARD_INFO("lis3dh_acc_misc", 0x18),
-		.platform_data = &lis3dh_data,
-	},
+#if defined(CONFIG_INPUT_PROX_PIC12LF1822) ||\
+	defined(CONFIG_INPUT_PROX_PIC12LF1822_MODULE)
 	{
 		/* Wario Proximity */
 		I2C_BOARD_INFO("wario_prox", 0x0D)
 	},
+#endif
+#if defined(CONFIG_INPUT_SX9500) || defined(CONFIG_INPUT_SX9500_MODULE)
+	{
+		/* sx9306 Proximity */
+		I2C_BOARD_INFO("sx9500", 0x28),
+		.flags         = I2C_CLIENT_WAKE,
+		.platform_data = &sx9500_config,
+	},
+#endif
 	{
 		/* FSR Button */
 		I2C_BOARD_INFO("fsr_keypad", 0x58)
@@ -780,6 +880,13 @@ static inline void mx6_arm2_init_uart(void)
 		lab126_board_is(BOARD_ID_WARIO_4_256M_CFG_C) ||
 		lab126_board_is(BOARD_ID_BOURBON_WFO_PREEVT2) )
 		imx6sl_add_imx_uart(3, NULL); /* UART4 */
+#if defined(CONFIG_MX6SL_WARIO_WOODY)
+	/* Enable UART3 as Broadcom BT Main interface */
+	if (lab126_board_is(BOARD_ID_WHISKY_WFO) ||
+		lab126_board_is(BOARD_ID_WHISKY_WAN) || 
+		lab126_board_is(BOARD_ID_WOODY))
+		imx6sl_add_imx_uart(2, &mx6sl_wario_uart3_data); /* UART3 */
+#endif
 }
 
 static iomux_v3_cfg_t mx6sl_arm2_epdc_enable_pads[] = {
@@ -995,18 +1102,19 @@ static struct fb_videomode ed060scp_mode = {
 	.flag         = 0,
 };
 
-static struct fb_videomode en060tc1_mode = {
-	.name         = "EN060TC1",
+//whisky
+static struct fb_videomode en060tc1_1ce_mode = {
+	.name="20150722_EN060TC1_1CE",
 	.refresh      = 85,
 	.xres         = 1072,
 	.yres         = 1448,
-	.pixclock     = 120000000,
-	.left_margin  = 8,
-	.right_margin = 418,
+	.pixclock     = 80000000,
+	.left_margin  = 20,
+	.right_margin = 56,
 	.upper_margin = 4,
-	.lower_margin = 2,
-	.hsync_len    = 8,
-	.vsync_len    = 2,
+	.lower_margin = 7,
+	.hsync_len    = 32,
+	.vsync_len    = 1,
 	.sync         = 0,
 	.vmode        = FB_VMODE_NONINTERLACED,
 	.flag         = FLAG_SCAN_X_INVERT,
@@ -1093,38 +1201,40 @@ static struct imx_epdc_fb_mode panel_modes[PANEL_MODE_COUNT] = {
 		.physical_height = 91,
 		.material = EPD_MATERIAL_V220,
 	},
+	//whisky
 	[PANEL_MODE_EN060TC1_CARTA_1_2] = {
-		.vmode         = &en060tc1_mode,
+		.vmode         = &en060tc1_1ce_mode,
 		.vscan_holdoff = 4,
 		.sdoed_width   = 10,
 		.sdoed_delay   = 20,
 		.sdoez_width   = 10,
 		.sdoez_delay   = 20,
-		.gdclk_hp_offs = 871,
-		.gdsp_offs     = 499,
+		.gdclk_hp_offs = 465,
+		.gdsp_offs     = 415,
 		.gdoe_offs     = 0,
-		.gdclk_offs    = 12,
+		.gdclk_offs    = 91,
 		.num_ce        = 1,
 		.physical_width = 91,
 		.physical_height = 122,
 		.material = EPD_MATERIAL_CARTA_1_2,
 	},
-        [PANEL_MODE_ED060TC1_3CE_CARTA_1_2] = {
-                .vmode         = &ed060tc1_3ce_mode,
-                .vscan_holdoff = 4,
-                .sdoed_width   = 10,
-                .sdoed_delay   = 20,
-                .sdoez_width   = 10,
-                .sdoez_delay   = 20,
-                .gdclk_hp_offs = 562,
-                .gdsp_offs     = 662,
-                .gdoe_offs     = 0,
-                .gdclk_offs    = 225,
-                .num_ce        = 3,
-                .physical_width  = 122,
-                .physical_height = 91,
-                .material = EPD_MATERIAL_CARTA_1_2,
-        },
+	/* panel mode param for muscat */
+	[PANEL_MODE_ED060TC1_3CE_CARTA_1_2] = {
+		.vmode         = &ed060tc1_3ce_mode,
+		.vscan_holdoff = 4,
+		.sdoed_width   = 10,
+		.sdoed_delay   = 20,
+		.sdoez_width   = 10,
+		.sdoez_delay   = 20,
+		.gdclk_hp_offs = 562,
+		.gdsp_offs     = 662,
+		.gdoe_offs     = 0,
+		.gdclk_offs    = 225,
+		.num_ce        = 3,
+		.physical_width  = 122,
+		.physical_height = 91,
+		.material = EPD_MATERIAL_CARTA_1_2,
+	},
 };
 
 static struct imx_epdc_fb_platform_data epdc_data = {
@@ -1183,7 +1293,16 @@ int wifi_card_enable(void)
 	}
 
 	/* Enable card power */
-	gpio_wifi_power_enable(1);
+#if defined(CONFIG_MX6SL_WARIO_WOODY)
+	if (lab126_board_is(BOARD_ID_WHISKY_WFO) ||
+		lab126_board_is(BOARD_ID_WHISKY_WAN) ||
+		lab126_board_is(BOARD_ID_WOODY)) {
+			brcm_gpio_wifi_power_enable(1);
+	}
+#endif
+#if defined(CONFIG_MX6SL_WARIO_BASE)
+		gpio_wifi_power_enable(1);
+#endif	
 	mdelay(100);
 
 	tasklet_schedule(&sdhost->card_tasklet);
@@ -1200,8 +1319,16 @@ void wifi_card_disable(void)
 	wifi_powered = 0;
 
 	/* Power down the card first */
+#if defined(CONFIG_MX6SL_WARIO_WOODY)
+		if (lab126_board_is(BOARD_ID_WHISKY_WFO) ||
+		lab126_board_is(BOARD_ID_WHISKY_WAN) ||
+		lab126_board_is(BOARD_ID_WOODY)) {
+			brcm_gpio_wifi_power_enable(0);
+	}
+#endif
+#if defined(CONFIG_MX6SL_WARIO_BASE)
 	gpio_wifi_power_enable(0);
-
+#endif
 	if (wifi_pdev) {
 		int timeout = 10 ;
 		/* Host driver will remove the card when a request fails
@@ -1260,15 +1387,87 @@ EXPORT_SYMBOL(haptic_drive_pin);
 
 static void wan_gpio_init(void)
 {
+#if defined(CONFIG_MX6SL_WARIO_WOODY)
+	if (whistler_wan_request_gpio()) {
+		printk(KERN_ERR "%s: failed to request WAN GPIO!\n", __func__);
+		return;
+	}
+#elif defined(CONFIG_MX6SL_WARIO_BASE)
 	wan_request_gpio();
-
 	/* Init & enable WAN LDO control by default */
 	gpio_wan_ldo_fet_init();
+#endif
 	gpio_wan_power(0);
 
 	/*free'em, it'll be requested again in wan module*/
 	wan_free_gpio();
 }
+
+#if defined(CONFIG_MX6SL_WARIO_WOODY)
+struct wifi_platform_data {
+	int (*set_power)(int val);
+	int (*set_reset)(int val);
+	int (*set_carddetect)(int val);
+	void *(*mem_prealloc)(int section, unsigned long size);
+	int (*get_mac_addr)(unsigned char *buf);
+	void *(*get_country_code)(char *ccode);
+};
+
+static int hexval(char c)
+{
+	if (c >= '0' && c <= '9')
+		return c - '0';
+	else if (c >= 'a' && c <= 'f')
+		return c - 'a' + 10;
+	else if (c >= 'A' && c <= 'F')
+		return c - 'A' + 10;
+	return 0;
+}
+
+static int brcm_wifi_get_mac_addr(unsigned char *buf)
+{
+	char mac_addr[6];
+	int idx;
+	if (!buf)
+		return -EFAULT;
+		
+	for (idx = 0; idx < 6; idx++) {
+		mac_addr[idx]  = hexval(lab126_mac_address[idx*2])<<4;
+		mac_addr[idx] += hexval(lab126_mac_address[idx*2+1]);
+	}
+	memcpy(buf, mac_addr, 6);
+
+	return 0;
+}
+
+static struct resource bcm_wifi_resource[] = {
+	[0] = {
+	 .name = "bcmdhd_wlan_irq",
+	 .start = gpio_to_irq(MX6SL_WARIO_WIFI_WAKE_ON_LAN_B),
+	 .end   = gpio_to_irq(MX6SL_WARIO_WIFI_WAKE_ON_LAN_B),
+	 .flags = IORESOURCE_IRQ | IORESOURCE_IRQ_HIGHLEVEL,
+	},
+};
+
+static struct wifi_platform_data brcm_wifi_control = {
+	.set_power      = NULL,
+	.set_reset      = NULL,
+	.set_carddetect = NULL,
+	.mem_prealloc	= NULL,
+	.get_mac_addr	= brcm_wifi_get_mac_addr,
+	.get_country_code = NULL,
+};
+
+static struct platform_device bcm_wifi_device = {
+	 .name           = "bcmdhd_wlan",
+	 .id             = 1,
+	 .num_resources  = ARRAY_SIZE(bcm_wifi_resource),
+	 .resource       = bcm_wifi_resource,
+	 .dev            = {
+		 .platform_data = &brcm_wifi_control,
+	 },
+};
+#endif
 
 /*!
  * Board specific initialization.
@@ -1297,6 +1496,40 @@ static void __init mx6_wario_init(void)
 		max77696_pdata.gauge_pdata.v_alert_max = 4400;
 	}
 
+	if (lab126_board_is(BOARD_ID_WHISKY_WFO) ||
+		lab126_board_is(BOARD_ID_WHISKY_WAN) ) {
+		max77696_pdata.chg_pdata.cc_uA= 133000;	
+		max77696_pdata.chg_pdata.to_ith = 50000;	
+		max77696_pdata.chg_pdata.cv_jta_mV = 4100;	/* JEITA Charge termination voltage = 4.1V */
+		max77696_pdata.chg_pdata.fast_chg_time = 6;	/* Fast Charge timer duration = 6hours */
+		max77696_pdata.chg_pdata.chg_dc_lpm = true;	/* enable chga dc-dc low power mode */
+
+		/* S_ALRT_MAX = 95% SOC; S_ALRT_MIN = 80% SOC */
+		max77696_pdata.gauge_pdata.s_alert_max = SYS_HI_SOC_THRESHOLD;
+		max77696_pdata.gauge_pdata.s_alert_min = SYS_LO_SOC_THRESHOLD;
+
+		/* T_ALRT_MAX = 60degC; T_ALRT_MIN = 45degC */
+		max77696_pdata.gauge_pdata.t_alert_max = SYS_CRIT_TEMP_THRESHOLD;
+		max77696_pdata.gauge_pdata.t_alert_min = SYS_HI_TEMP_THRESHOLD;
+
+		/*
+		 * Set LED sign-of-life brightness to 0x1F [WHISKY]
+		 */
+		max77696_pdata.led_pdata[0].sol_brightness = LED_MED_BRIGHTNESS;
+		max77696_pdata.led_pdata[1].sol_brightness = LED_MED_BRIGHTNESS;
+
+		/* Set LED to manual mode */
+		max77696_pdata.led_pdata[0].manual_mode = true; 
+		max77696_pdata.led_pdata[1].manual_mode = true;
+
+		/* Set LED default state to OFF */
+		max77696_pdata.led_pdata[0].init_state = LED_FLASHD_OFF; 
+		max77696_pdata.led_pdata[1].init_state = LED_FLASHD_OFF;
+
+		/* set FL default state */
+		max77696_pdata.bl_pdata.brightness = DUET_FL_LEVEL12_MID;
+	}
+
 	if(lab126_board_is(BOARD_ID_BOURBON_WFO) ||
 		lab126_board_is(BOARD_ID_WARIO_4_256M_CFG_C) ||
 		lab126_board_is(BOARD_ID_BOURBON_WFO_PREEVT2) ) {
@@ -1312,11 +1545,30 @@ static void __init mx6_wario_init(void)
 		max77696_pdata.led_pdata[1].sol_brightness = LED_MED_BRIGHTNESS;
 	}
 
-	if (lab126_board_is(BOARD_ID_WARIO)) {
+	if (lab126_board_is(BOARD_ID_WARIO) ||
+		(lab126_board_is(BOARD_ID_WOODY)) ) {
 		/*
 		 * Charge Top-off current threshold = 50mA
 		 */
 		max77696_pdata.chg_pdata.to_ith = 50000;
+		max77696_pdata.chg_pdata.chg_dc_lpm = true;	/* enable chga dc-dc low power mode */
+	}
+
+	/* configure PMIC GPIO for boost control instead of SOC */
+	if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+		lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+		max77696_pdata.gpio_pdata.init_data[1].alter_mode = MAX77696_GPIO_AME_STDGPIO;
+		max77696_pdata.gpio_pdata.init_data[1].direction = MAX77696_GPIO_DIR_OUTPUT;
+		max77696_pdata.gpio_pdata.init_data[1].u.output.out_cfg = MAX77696_GPIO_OUTCFG_PUSHPULL;
+		max77696_pdata.gpio_pdata.init_data[1].u.output.drive = MAX77696_GPIO_DO_LO;
+		/*
+		 * GPIO0 is not used and so should be programmed as it is when it first powers-on: Input, pull-down.
+		 * VCCGPIO24 is not powered because we don't use GPIO2, GPIO3 and GPIO4 in the Whisky design. 
+		**/	
+		max77696_pdata.gpio_pdata.init_data[0].pulldn_en = 1;
+#ifdef CONFIG_POWER_SODA
+		mx6sl_wario_soda_platform_data.boost_ctrl_gpio = MAX77696_GPIO_1;
+#endif
 	}
 
 	imx6q_add_imx_snvs_rtc();
@@ -1344,12 +1596,15 @@ static void __init mx6_wario_init(void)
 		mx6sl_cyttsp4_init();
 #endif
 	imx6q_add_pm_imx(0, &mx6_wario_pm_data);
-	imx6q_add_sdhci_usdhc_imx(1, &mx6_arm2_sd2_data);
 
+#ifndef CONFIG_FALCON_WRAPPER
+	imx6q_add_sdhci_usdhc_imx(1, &mx6_arm2_sd2_data);
+#endif
 	/* Make sure the wifi chip is off on boot */
+#ifdef CONFIG_MX6SL_WARIO_BASE
 	gpio_request(MX6_WARIO_WIFI_PWD, "wifi_pwr");
 	gpio_wifi_power_enable(0);
-
+#endif
 	wifi_pdev = imx6q_add_sdhci_usdhc_imx(2, &mx6_arm2_sd3_data);
 
 #ifdef CONFIG_WARIO_SDCARD
@@ -1371,6 +1626,11 @@ static void __init mx6_wario_init(void)
 #ifdef CONFIG_WARIO_HALL
 	mxc_register_device(&mx6sl_wario_hall_device, &mx6sl_wario_hall_platform_data);
 #endif
+
+#ifdef CONFIG_POWER_SODA
+	mxc_register_device(&mx6sl_wario_soda_device, &mx6sl_wario_soda_platform_data);
+#endif
+
 	imx6q_add_imx2_wdt(0, NULL);
 	imx6q_add_busfreq();
 	imx6q_add_ecspi(0, &mx6_wario_spi_data);
@@ -1382,7 +1642,7 @@ static void __init mx6_wario_init(void)
 	/*
 	 * uboot already setup the pins, here just request the gpio by name to make kernel happy
 	 * */
-	if(lab126_board_is(BOARD_ID_MUSCAT_WFO) || lab126_board_is(BOARD_ID_MUSCAT_WAN))
+	if(HW_SUPPORT_EMMC_POWER_GATE)
 		init_emmc_power_gate_pins();
 
 
@@ -1390,6 +1650,27 @@ static void __init mx6_wario_init(void)
 	wario_debug_toggle_pin_init();
 #endif
 
+#if defined(CONFIG_MX6SL_WARIO_WOODY)
+	if (lab126_board_is(BOARD_ID_WHISKY_WFO) ||
+		lab126_board_is(BOARD_ID_WHISKY_WAN) ||
+		lab126_board_is(BOARD_ID_WOODY)) {
+		/* Initialise and turn-off Broadcom BT */
+		if(brcm_gpio_wifi_bt_init()) {
+			printk(KERN_DEBUG "BRCM chip Wifi+BT GPIO request failed!!");
+			return;
+		}
+		/* Keep Wifi + BT Disabled */
+		brcm_gpio_wifi_power_enable(0);
+		brcm_gpio_bt_power_enable(0);
+		
+		mdelay(100);
+		
+		/* register wifi platform data */
+		platform_device_register(&bcm_wifi_device);
+		/* register Bluetooth power ctrl platform device */
+		mxc_register_device(&wario_bt_pwr_device, &brcm_btpwr_data);
+	}
+#endif
 }
 
 extern void __iomem *twd_base;
@@ -1412,7 +1693,19 @@ static struct sys_timer mxc_timer = {
 
 static void __init mx6_wario_reserve(void)
 {
+#ifdef CONFIG_FB_MXC_EINK_WORK_BUFFER_RESERVED
+	if(!memblock_is_region_memory(CONFIG_FB_MXC_EINK_WORK_BUFFER_ADDR, CONFIG_FB_MXC_EINK_WORK_BUFFER_SIZE)) {
+		printk(KERN_ERR "#### Error!! reserved WB area is not in a memory region!!\n");
+		return;
+	}
 
+	if(memblock_is_region_reserved(CONFIG_FB_MXC_EINK_WORK_BUFFER_ADDR, CONFIG_FB_MXC_EINK_WORK_BUFFER_SIZE)) {
+		printk(KERN_ERR "#### Error!! reserved WB area overlaps in-use memory region!!\n");
+		return;
+	}
+
+	memblock_remove(CONFIG_FB_MXC_EINK_WORK_BUFFER_ADDR, CONFIG_FB_MXC_EINK_WORK_BUFFER_SIZE);
+#endif // CONFIG_FB_MXC_EINK_WORK_BUFFER_RESERVED
 }
 
 MACHINE_START(MX6SL_WARIO, "Freescale i.MX 6SoloLite based Wario Board")

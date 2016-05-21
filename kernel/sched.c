@@ -4296,6 +4296,12 @@ need_resched:
 	preempt_enable_no_resched();
 	if (need_resched())
 		goto need_resched;
+#ifdef CONFIG_FALCON_WRAPPER
+	{
+		void falcon_delayed_wakeup(void);
+		falcon_delayed_wakeup();
+	}
+#endif
 }
 
 static inline void sched_submit_work(struct task_struct *tsk)

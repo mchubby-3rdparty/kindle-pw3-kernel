@@ -196,6 +196,12 @@ static void __init arm_bootmem_init(unsigned long start_pfn,
 	phys_addr_t bitmap;
 	pg_data_t *pgdat;
 
+#ifdef CONFIG_FALCON
+	{
+		extern void __init falcon_mm_init(unsigned long start_pfn, unsigned long end_pfn);
+		falcon_mm_init(start_pfn, end_pfn);
+	}
+#endif
 	/*
 	 * Allocate the bootmem bitmap page.  This must be in a region
 	 * of memory which has already been mapped.
@@ -383,6 +389,19 @@ void __init arm_memblock_init(struct meminfo *mi, struct machine_desc *mdesc)
 	arm_mm_memblock_reserve();
 	arm_dt_memblock_reserve();
 
+#if defined(CONFIG_FALCON) && defined(CONFIG_HAVE_MEMBLOCK)
+	{
+		extern void falcon_mem_reserve(void);
+		falcon_mem_reserve();
+	}
+#if defined(CONFIG_FALCON_PSEUDO_NMI)
+	{
+		extern void falcon_pnmi_handler_reserve(void);
+		falcon_pnmi_handler_reserve();
+	}
+#endif
+#endif
+	
 	/* reserve any platform specific memblock areas */
 	if (mdesc->reserve)
 		mdesc->reserve();

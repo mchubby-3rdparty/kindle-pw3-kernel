@@ -26,6 +26,7 @@
 #include <linux/sched.h>
 #include <mach/boardid.h>
 #include <linux/regulator/consumer.h>
+#include <linux/mfd/max77696.h>
 
 #define DEBUG 1
 
@@ -191,6 +192,25 @@ static void set_fw_ready_gpio_state(int enable)
         }
 }
 #endif
+
+static void usb_regulator_control(bool on)
+{
+	struct regulator* usb_reg;
+	
+	if (on) {
+		log_debug("elmo_resume::enable regulator\n");
+    		usb_reg = regulator_get(NULL, "WAN_USB_HOST_PHY");
+	        if (!IS_ERR(usb_reg)) 
+	   	   regulator_enable(usb_reg); 
+     		regulator_put(usb_reg);
+	} else  {
+    		log_debug("elmo_suspend::disable regulator\n");
+    		usb_reg = regulator_get(NULL, "WAN_USB_HOST_PHY");
+    		if (!IS_ERR(usb_reg)) 
+  		   regulator_disable(usb_reg); 
+    		regulator_put(usb_reg); 
+	}
+}
 
 static inline int
 get_wan_on_off(
@@ -548,19 +568,6 @@ proc_usb_write(
 	return count;
 }
 
-
-static wan_usb_wake_callback_t usb_wake_callback = NULL;
-static void *usb_wake_callback_data = NULL;
-
-void
-wan_set_usb_wake_callback(
-	wan_usb_wake_callback_t wake_fn, void *wake_data)
-{
-	usb_wake_callback = wake_fn;
-	usb_wake_callback_data = wake_data;
-}
-EXPORT_SYMBOL(wan_set_usb_wake_callback);
-
 static void do_elmo_fw_ready(struct work_struct *dummy)
 {
 	/* FW ready line is high until power off */
@@ -576,8 +583,8 @@ static void do_elmo_fw_ready(struct work_struct *dummy)
 		log_debug("elmo_fw::modem reset?\n");
 		elmo_fw_ready_condition =  0;
 		if( usb_wake_callback ) {
-                        (*usb_wake_callback)(usb_wake_callback_data);
-                }
+			(*usb_wake_callback)(usb_wake_callback_data);
+		}
 		irq_set_irq_type(gpio_wan_fw_ready_irq(),IRQF_TRIGGER_RISING);
 	}
 	enable_irq(gpio_wan_fw_ready_irq());
@@ -649,12 +656,16 @@ static int elmo_suspend(struct platform_device *pdev, pm_message_t state)
 	disable_irq(gpio_wan_fw_ready_irq());
 	disable_irq(gpio_wan_mhi_irq());
 	disable_irq(gpio_wan_host_wake_irq());
+
+	usb_regulator_control(0);
 	return 0;
 }
 
 static int elmo_resume(struct platform_device *pdev)
 {
 	log_debug("elmo_resume::enable irqs\n");
+	usb_regulator_control(1);
+	udelay(600);
 	enable_irq(gpio_wan_fw_ready_irq());
 	enable_irq(gpio_wan_mhi_irq());
 	enable_irq(gpio_wan_host_wake_irq());
@@ -879,7 +890,7 @@ mwan_init(
 	int ret = 0;
 
 	log_info("init:wario WAN hardware driver " VERSION "\n");
-
+	
 	// create the "/proc/wan" parent directory
 	proc_wan_parent = create_proc_entry(PROC_WAN, S_IFDIR | S_IRUGO | S_IXUGO, NULL);
 	if (proc_wan_parent != NULL) {

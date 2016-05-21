@@ -10,6 +10,7 @@
 #include <asm/io.h>
 #include "include/iomux_define.h"
 #include "include/iomux_register.h"
+#include <mach/boardid.h>
 
 // Function to config iomux for instance gpio2.
 void gpio2_iomux_config(void)
@@ -80,10 +81,16 @@ void gpio2_iomux_config(void)
     //             Select one out of next values for pad: EPDC_GDRL.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+    if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+        lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+           (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+           (SPD_50MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_EPDC_GDRL);
+    } else {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
            (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
            (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_EPDC_GDRL);
-
+    }
     // Config gpio2.GPIO[10] to pad EPDC_PWRCTRL3(G12)
     // Mux Register:
     // IOMUXC_SW_MUX_CTL_PAD_EPDC_PWRCTRL3(0x020E00F0)
@@ -152,10 +159,17 @@ void gpio2_iomux_config(void)
     //             Select one out of next values for pad: EPDC_PWRCTRL3.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_DISABLED & 0x1) << 16 | (PUS_47KOHM_PU & 0x3) << 14 |
-           (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
-           (SPD_TBD & 0x3) << 6 | (DSE_120OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_EPDC_PWRCTRL3);
+    if (lab126_board_is(BOARD_ID_WHISKY_WAN) || lab126_board_is(BOARD_ID_WHISKY_WFO) ||
+       lab126_board_is(BOARD_ID_WOODY)) {
+        /* 3GM_POWER_ON is a 3V2 signal */
+        __raw_writel((LVE_DISABLED & 0x1) << 22 | (HYS_DISABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+          (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+          (SPD_TBD & 0x3) << 6 | (DSE_120OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_EPDC_PWRCTRL3);
+    } else {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_DISABLED & 0x1) << 16 | (PUS_47KOHM_PU & 0x3) << 14 |
+          (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+          (SPD_TBD & 0x3) << 6 | (DSE_120OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_EPDC_PWRCTRL3);
+    }
 
     // Config gpio2.GPIO[12] to pad EPDC_PWRINT(F10)
     // Mux Register:
@@ -226,9 +240,16 @@ void gpio2_iomux_config(void)
     //             Select one out of next values for pad: EPDC_PWRINT.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+    if (lab126_board_is(BOARD_ID_WHISKY_WAN) || lab126_board_is(BOARD_ID_WHISKY_WFO) ||
+        lab126_board_is(BOARD_ID_WOODY)) {
+         __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_DISABLED & 0x1) << 16 |
+           (PKE_DISABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+           (SPD_50MHZ & 0x3) << 6 | (DSE_240OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_EPDC_PWRINT);
+    } else {
+         __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
            (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
            (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_EPDC_PWRINT);
+    }
 
     // Config gpio2.GPIO[14] to pad EPDC_PWRWAKEUP(D10)
     // Mux Register:
@@ -299,9 +320,16 @@ void gpio2_iomux_config(void)
     //             Select one out of next values for pad: EPDC_PWRWAKEUP.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
-           (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
-           (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_EPDC_PWRWAKEUP);
+    if (lab126_board_is(BOARD_ID_WHISKY_WAN) || lab126_board_is(BOARD_ID_WHISKY_WFO) ||
+        lab126_board_is(BOARD_ID_WOODY)) {
+          __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_DISABLED & 0x1) << 16 |
+            (PKE_DISABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+            (SPD_50MHZ & 0x3) << 6 | (DSE_240OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_EPDC_PWRWAKEUP);
+	} else {
+          __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+            (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+            (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_EPDC_PWRWAKEUP);
+    }
 
     // Config gpio2.GPIO[15] to pad LCD_CLK(T22)
     // Mux Register:
@@ -440,10 +468,16 @@ void gpio2_iomux_config(void)
     //             Select one out of next values for pad: LCD_HSYNC.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+    if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+        lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+           (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+           (SPD_50MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_LCD_HSYNC);
+    } else {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
            (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
            (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_LCD_HSYNC);
-
+    }
     // Config gpio2.GPIO[18] to pad LCD_VSYNC(J23)
     // Mux Register:
     // IOMUXC_SW_MUX_CTL_PAD_LCD_VSYNC(0x020E021C)
@@ -510,10 +544,16 @@ void gpio2_iomux_config(void)
     //             Select one out of next values for pad: LCD_VSYNC.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+    if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+        lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+           (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+           (SPD_50MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_LCD_VSYNC);
+    } else {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
            (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
            (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_LCD_VSYNC);
-
+    }
     // Config gpio2.GPIO[19] to pad LCD_RESET(H24)
     // Mux Register:
     // IOMUXC_SW_MUX_CTL_PAD_LCD_RESET(0x020E0218)
@@ -656,10 +696,16 @@ void gpio2_iomux_config(void)
     //             Select one out of next values for pad: LCD_DAT0.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+    if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+        lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+           (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+           (SPD_50MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_LCD_DAT0);
+    } else {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
            (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
            (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_LCD_DAT0);
-
+    }
     // Config gpio2.GPIO[21] to pad LCD_DAT1(W23)
     // Mux Register:
     // IOMUXC_SW_MUX_CTL_PAD_LCD_DAT1(0x020E01B4)
@@ -729,10 +775,16 @@ void gpio2_iomux_config(void)
     //             Select one out of next values for pad: LCD_DAT1.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+    if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+        lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+           (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+           (SPD_50MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_LCD_DAT1);
+    } else {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
            (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
            (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_LCD_DAT1);
-
+    }
     // Config gpio2.GPIO[22] to pad LCD_DAT2(W24)
     // Mux Register:
     // IOMUXC_SW_MUX_CTL_PAD_LCD_DAT2(0x020E01E0)
@@ -801,10 +853,16 @@ void gpio2_iomux_config(void)
     //             Select one out of next values for pad: LCD_DAT2.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+    if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+        lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+           (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+           (SPD_50MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_LCD_DAT2);
+    } else {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
            (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
            (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_LCD_DAT2);
-
+    }
     // Config gpio2.GPIO[23] to pad LCD_DAT3(V23)
     // Mux Register:
     // IOMUXC_SW_MUX_CTL_PAD_LCD_DAT3(0x020E01F4)
@@ -1163,10 +1221,16 @@ void gpio2_iomux_config(void)
     //             Select one out of next values for pad: LCD_DAT7.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+    if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+        lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+           (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+           (SPD_50MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_LCD_DAT7);
+    } else {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
            (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
            (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_LCD_DAT7);
-
+    }
     // Config gpio2.GPIO[28] to pad LCD_DAT8(T23)
     // Mux Register:
     // IOMUXC_SW_MUX_CTL_PAD_LCD_DAT8(0x020E0208)
@@ -1236,10 +1300,16 @@ void gpio2_iomux_config(void)
     //             Select one out of next values for pad: LCD_DAT8.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+    if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+        lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+           (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+           (SPD_50MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_LCD_DAT8);
+    } else {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
            (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
            (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_LCD_DAT8);
-
+    }
     // Config gpio2.GPIO[29] to pad LCD_DAT9(T24)
     // Mux Register:
     // IOMUXC_SW_MUX_CTL_PAD_LCD_DAT9(0x020E020C)
@@ -1309,10 +1379,16 @@ void gpio2_iomux_config(void)
     //             Select one out of next values for pad: LCD_DAT9.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+    if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+        lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+           (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+           (SPD_50MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_LCD_DAT9);
+    } else {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
            (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
            (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_LCD_DAT9);
-
+    }
     // Config gpio2.GPIO[30] to pad LCD_DAT10(R23)
     // Mux Register:
     // IOMUXC_SW_MUX_CTL_PAD_LCD_DAT10(0x020E01B8)
@@ -1382,10 +1458,16 @@ void gpio2_iomux_config(void)
     //             Select one out of next values for pad: LCD_DAT10.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+    if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+        lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+           (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+           (SPD_50MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_LCD_DAT10);
+    } else {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
            (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
            (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_LCD_DAT10);
-
+    }
     // Config gpio2.GPIO[31] to pad LCD_DAT11(R24)
     // Mux Register:
     // IOMUXC_SW_MUX_CTL_PAD_LCD_DAT11(0x020E01BC)
@@ -1455,10 +1537,16 @@ void gpio2_iomux_config(void)
     //             Select one out of next values for pad: LCD_DAT11.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+    if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+        lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+           (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+           (SPD_50MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_LCD_DAT11);
+    } else {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
            (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
            (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_LCD_DAT11);
-
+    }
     // Config gpio2.GPIO[7] to pad EPDC_PWRCTRL0(D11)
     // Mux Register:
     // IOMUXC_SW_MUX_CTL_PAD_EPDC_PWRCTRL0(0x020E00E4)
@@ -1526,9 +1614,16 @@ void gpio2_iomux_config(void)
     //             Select one out of next values for pad: EPDC_PWRCTRL0.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
-           (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
-           (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_EPDC_PWRCTRL0);
+    if (lab126_board_is(BOARD_ID_WHISKY_WAN) || lab126_board_is(BOARD_ID_WHISKY_WFO) ||
+        lab126_board_is(BOARD_ID_WOODY)) {
+          __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_DISABLED & 0x1) << 16 |
+            (PKE_DISABLED & 0x1) << 12 | (ODE_ENABLED & 0x1) << 11 |
+            (SPD_50MHZ & 0x3) << 6 | (DSE_240OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_EPDC_PWRCTRL0);
+    } else {
+          __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+            (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+            (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_EPDC_PWRCTRL0);
+    }
 
     // Config gpio2.GPIO[8] to pad EPDC_PWRCTRL1(E11)
     // Mux Register:
@@ -1597,9 +1692,16 @@ void gpio2_iomux_config(void)
     //             Select one out of next values for pad: EPDC_PWRCTRL1.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_DISABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
-           (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
-           (SPD_TBD & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_EPDC_PWRCTRL1);
+    if (lab126_board_is(BOARD_ID_WHISKY_WAN) || lab126_board_is(BOARD_ID_WHISKY_WFO) ||
+        lab126_board_is(BOARD_ID_WOODY)) {
+          __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_DISABLED & 0x1) << 16 |
+            (PKE_DISABLED & 0x1) << 12 | (ODE_ENABLED & 0x1) << 11 |
+            (SPD_50MHZ & 0x3) << 6 | (DSE_240OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_EPDC_PWRCTRL1);
+    } else {
+          __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_DISABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+            (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+            (SPD_TBD & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_EPDC_PWRCTRL1);
+    }
 
     // Config gpio2.GPIO[9] to pad EPDC_PWRCTRL2(F11)
     // Mux Register:
@@ -1669,7 +1771,14 @@ void gpio2_iomux_config(void)
     //             Select one out of next values for pad: EPDC_PWRCTRL2.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
-           (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
-           (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_EPDC_PWRCTRL2);
+    if (lab126_board_is(BOARD_ID_WHISKY_WAN) || lab126_board_is(BOARD_ID_WHISKY_WFO) ||
+        lab126_board_is(BOARD_ID_WOODY)) {
+          __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_DISABLED & 0x1) << 16 |
+            (PKE_DISABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+            (SPD_50MHZ & 0x3) << 6 | (DSE_240OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_EPDC_PWRCTRL2);
+    } else {
+          __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+            (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+            (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_EPDC_PWRCTRL2);
+    }
 }

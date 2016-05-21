@@ -84,10 +84,16 @@ void gpio4_iomux_config(void)
     //             Select one out of next values for pad: KEY_COL4.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_DISABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+    if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+        lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+           (PUE_PULL & 0x1) << 13 | (PKE_DISABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+           (SPD_50MHZ & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_KEY_COL4);
+    } else {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_DISABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
            (PUE_PULL & 0x1) << 13 | (PKE_DISABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
            (SPD_TBD & 0x3) << 6 | (DSE_60OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_KEY_COL4);
-
+    }
     // Config gpio4.GPIO[1] to pad KEY_ROW4(E19)
     // Mux Register:
     // IOMUXC_SW_MUX_CTL_PAD_KEY_ROW4(0x020E019C)
@@ -158,9 +164,16 @@ void gpio4_iomux_config(void)
     //             Select one out of next values for pad: KEY_ROW4.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PU & 0x3) << 14 |
+    if (lab126_board_is(BOARD_ID_WHISKY_WAN) || lab126_board_is(BOARD_ID_WHISKY_WFO) ||
+        lab126_board_is(BOARD_ID_WOODY)) {
+         __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PU & 0x3) << 14 |
            (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
            (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_KEY_ROW4);
+    } else {
+         __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PU & 0x3) << 14 |
+           (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+           (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_KEY_ROW4);
+    }
 
     // Config gpio4.GPIO[12] to pad ECSPI2_SCLK(U19)
     // Mux Register:
@@ -523,9 +536,16 @@ void gpio4_iomux_config(void)
     //             Select one out of next values for pad: FEC_TXD1.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+    if (lab126_board_is(BOARD_ID_WHISKY_WAN) || lab126_board_is(BOARD_ID_WHISKY_WFO) ||
+        lab126_board_is(BOARD_ID_WOODY)) {
+         __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_DISABLED & 0x1) << 16 | 
+           (PKE_DISABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+           (SPD_50MHZ & 0x3) << 6 | (DSE_240OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_FEC_TXD1);
+    } else {
+         __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
            (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
            (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_FEC_TXD1);
+    }
 
     // Config gpio4.GPIO[17] to pad FEC_RXD0(AA10)
     // Mux Register:
@@ -594,8 +614,9 @@ void gpio4_iomux_config(void)
     //             Select one out of next values for pad: FEC_RXD0.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    if(lab126_board_is(BOARD_ID_MUSCAT_WAN) || 
-        lab126_board_is(BOARD_ID_MUSCAT_WFO) ) {
+    if(lab126_board_is(BOARD_ID_MUSCAT_WAN) || lab126_board_is(BOARD_ID_MUSCAT_WFO) ||
+       lab126_board_is(BOARD_ID_WHISKY_WAN) || lab126_board_is(BOARD_ID_WHISKY_WFO) ||
+       lab126_board_is(BOARD_ID_WOODY) ) {
         __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PU & 0x3) << 14 |
            (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
            (SPD_100MHZ & 0x3) << 6 | (DSE_34OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_FEC_RXD0);
@@ -819,9 +840,16 @@ void gpio4_iomux_config(void)
     //             Select one out of next values for pad: KEY_COL5.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+    if (lab126_board_is(BOARD_ID_WHISKY_WAN) || lab126_board_is(BOARD_ID_WHISKY_WFO) ||
+        lab126_board_is(BOARD_ID_WOODY)) {
+         __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+           (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+           (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_KEY_COL5);
+    } else {
+         __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
            (PUE_KEEP & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
            (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_KEY_COL5);
+    }
 
     // Config gpio4.GPIO[20] to pad FEC_MDIO(AB7)
     // Mux Register:
@@ -1033,8 +1061,9 @@ void gpio4_iomux_config(void)
     //             Select one out of next values for pad: FEC_MDC.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    if(lab126_board_is(BOARD_ID_MUSCAT_WAN) || 
-        lab126_board_is(BOARD_ID_MUSCAT_WFO) ) {
+    if(lab126_board_is(BOARD_ID_MUSCAT_WAN) || lab126_board_is(BOARD_ID_MUSCAT_WFO) ||
+       lab126_board_is(BOARD_ID_WHISKY_WAN) || lab126_board_is(BOARD_ID_WHISKY_WFO) ||
+       lab126_board_is(BOARD_ID_WOODY) ) {
         __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PU & 0x3) << 14 |
            (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
            (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_FEC_MDC);
@@ -1254,9 +1283,12 @@ void gpio4_iomux_config(void)
     //             Select one out of next values for pad: FEC_REF_CLK.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+    if (lab126_board_is(BOARD_ID_WHISKY_WAN) || lab126_board_is(BOARD_ID_WHISKY_WFO) ||
+        lab126_board_is(BOARD_ID_WOODY)) {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PU & 0x3) << 14 |
            (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
            (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_FEC_REF_CLK);
+     }
 
     // Config gpio4.GPIO[3] to pad KEY_ROW5(D23)
     // Mux Register:
@@ -1638,7 +1670,15 @@ void gpio4_iomux_config(void)
     //             Select one out of next values for pad: KEY_ROW7.
     //     SRE_SLOW (0) - Slow Slew Rate
     //     SRE_FAST (1) - Fast Slew Rate
-    __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
-           (PUE_KEEP & 0x1) << 13 | (PKE_DISABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
-           (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_KEY_ROW7);
+
+    if (lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) || lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||
+        lab126_board_rev_greater_eq(BOARD_ID_WOODY_2)) {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PU & 0x3) << 14 |
+        (PUE_PULL & 0x1) << 13 | (PKE_ENABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+        (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_KEY_ROW7);
+    } else {
+        __raw_writel((LVE_ENABLED & 0x1) << 22 | (HYS_ENABLED & 0x1) << 16 | (PUS_100KOHM_PD & 0x3) << 14 |
+        (PUE_KEEP & 0x1) << 13 | (PKE_DISABLED & 0x1) << 12 | (ODE_DISABLED & 0x1) << 11 |
+        (SPD_100MHZ & 0x3) << 6 | (DSE_40OHM & 0x7) << 3 | (SRE_SLOW & 0x1), IOMUXC_SW_PAD_CTL_PAD_KEY_ROW7);
+    }
 }

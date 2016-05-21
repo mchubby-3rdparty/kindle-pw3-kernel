@@ -54,6 +54,7 @@ struct max77696_led {
 	u8                    flashd;
 	u8                    flashp;
 	u8                    sol_brightness;
+	u8                    init_state;
 	struct work_struct    work;
 	struct mutex          lock;
 };
@@ -95,15 +96,6 @@ struct max77696_led {
 		 LEDIND_REG_BITMASK(reg, bit),\
 		 LEDIND_REG_BITSET(reg, bit, val));\
 	 })
-
-#define LED_FLASHD_OFF 0x0 /* off */
-#define LED_FLASHP_OFF 0xF /* on indefinitely */
-
-#define LED_FLASHD_ON  0xF /* 640ms */
-#define LED_FLASHP_ON  0x0 /* 640ms */
-
-#define LED_FLASHD_DEF 0xD /* 512ms */
-#define LED_FLASHP_DEF 0x1 /* 960ms */
 
 #define __search_index_of_approxi(_table, _val) \
 	({\
@@ -165,9 +157,9 @@ out:
 EXPORT_SYMBOL(max77696_led_set_manual_mode);
 
 /* max77696_led_ctrl:
- * 		LED Manual control - ON / OFF
+ * 		LED Manual control - ON / OFF / BLINK
  */
-int max77696_led_ctrl(unsigned int led_id, bool enable) 
+int max77696_led_ctrl(unsigned int led_id, int led_state) 
 {
 	struct max77696_chip *chip = max77696;
 	struct max77696_led *me = chip->led_ptr[led_id];
@@ -182,14 +174,20 @@ int max77696_led_ctrl(unsigned int led_id, bool enable)
 	ledset_reg = LEDIND_STATLEDSET_REG(me->id);
 	flash_reg  = LEDIND_STATFLASH_REG (me->id);
 
-	if (enable) {
+	if (led_state == MAX77696_LED_ON) {
 		/* LED ON */
 		flash_val = LEDIND_REG_BITSET(STATFLASH, FLASHD, LED_FLASHD_ON)|
 			LEDIND_REG_BITSET(STATFLASH, FLASHP, LED_FLASHP_ON);
-	} else {
+	} else if(led_state == MAX77696_LED_BLINK) {
+		/* LED BLINK */
+		flash_val = LEDIND_REG_BITSET(STATFLASH, FLASHD, LED_FLASHD_BLINK)|
+			LEDIND_REG_BITSET(STATFLASH, FLASHP, LED_FLASHP_BLINK);
+	} else if (led_state == MAX77696_LED_OFF) {
 		/* LED OFF */
 		flash_val = LEDIND_REG_BITSET(STATFLASH, FLASHD, LED_FLASHD_OFF)|
 			LEDIND_REG_BITSET(STATFLASH, FLASHP, LED_FLASHP_OFF);
+	} else {
+		goto out;
 	}
 
 	rc = max77696_write(me->i2c, flash_reg, flash_val);
@@ -445,7 +443,7 @@ static __devinit int max77696_led_probe (struct platform_device *pdev)
 	struct max77696_led_platform_data *pdata = pdev->dev.platform_data;
 	struct max77696_led *me;
 	int rc;
-	u8 ledset_reg;
+	u8 ledset_reg, flash_reg, ledset_val;
 
 	if (unlikely(!pdata)) {
 		dev_err(&(pdev->dev), "platform data is missing\n");
@@ -474,6 +472,7 @@ static __devinit int max77696_led_probe (struct platform_device *pdev)
 	me->id             = pdev->id;
 	me->manual_mode    = pdata->manual_mode;
 	me->sol_brightness = pdata->sol_brightness;
+	me->init_state     = pdata->init_state;
 	me->new_brightness = LED_HALF / 8;	/* set to 0x1F */
 
 	me->led_cdev.name            = pdata->info.name;
@@ -505,6 +504,33 @@ static __devinit int max77696_led_probe (struct platform_device *pdev)
 	if(me->sol_brightness != LED_DEF_BRIGHTNESS) {
 		ledset_reg = LEDIND_STATLEDSET_REG(me->id);
 		rc = max77696_write_masked(me->i2c, ledset_reg, LEDIND_STATLEDSET_LEDSET_M, me->sol_brightness);
+		if (unlikely(rc)) {
+			dev_err(me->dev, "STAT%dLEDSET write error [%d]\n", me->id, rc);
+			goto out_err_sol;
+		}
+	}
+
+	if (me->init_state == LED_FLASHD_OFF) {
+		/* LED OFF */
+		flash_reg  = LEDIND_STATFLASH_REG (me->id);
+		rc = max77696_write(me->i2c, flash_reg, 
+				LEDIND_REG_BITSET(STATFLASH, FLASHD, LED_FLASHD_OFF) |
+				LEDIND_REG_BITSET(STATFLASH, FLASHP, LED_FLASHP_OFF));
+		if (unlikely(rc)) {
+			dev_err(me->dev, "STAT%dLEDFLASH write error [%d]\n", me->id, rc);
+			goto out_err_sol;
+		}
+	}
+
+	if (me->manual_mode) {
+		ledset_reg = LEDIND_STATLEDSET_REG(me->id);
+		rc = max77696_read(me->i2c, ledset_reg, &ledset_val);
+		if (unlikely(rc)) {
+			dev_err(me->dev, "STAT%dLEDSET read error [%d]\n", me->id, rc);
+			goto out_err_sol;
+		}
+
+		rc = max77696_write(me->i2c, ledset_reg, (ledset_val | LEDIND_REG_BITSET(STATLEDSET, LEDEN, 1)));
 		if (unlikely(rc)) {
 			dev_err(me->dev, "STAT%dLEDSET write error [%d]\n", me->id, rc);
 			goto out_err_sol;

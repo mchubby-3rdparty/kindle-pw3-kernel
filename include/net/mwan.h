@@ -28,7 +28,8 @@ extern int wan_get_modem_type(void);
 
 typedef void (*wan_usb_wake_callback_t)(void *);
 
-extern void wan_set_usb_wake_callback(wan_usb_wake_callback_t callback, void *data);
+extern wan_usb_wake_callback_t usb_wake_callback;
+extern void *usb_wake_callback_data;
 
 #endif // __MWAN_H__
 

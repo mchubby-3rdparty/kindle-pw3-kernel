@@ -32,6 +32,7 @@
 int lab126_board_is(char *id);
 int lab126_board_rev_greater(char *id);
 int lab126_board_rev_greater_eq(char *id);
+int lab126_board_rev_eq(char *id);
 char lab126_pcbsn_x(void);
 int bootmode_is_diags(void);
 int __init lab126_idme_vars_init(void);
@@ -39,5 +40,23 @@ void __init early_init_lab126_board_id(void);
 
 extern char lab126_serial_number[];
 extern char lab126_mac_address[];
+
+#define LAB126_BOARDS_ENABLE_USB_OTG (lab126_board_is(BOARD_ID_ICEWINE_WARIO_512) ||\
+                                          lab126_board_is(BOARD_ID_ICEWINE_WFO_WARIO_512) ||\
+                                          lab126_board_is(BOARD_ID_MUSCAT_WAN) ||\
+                                          lab126_board_is(BOARD_ID_MUSCAT_WFO) ||\
+                                          lab126_board_is(BOARD_ID_WHISKY_WFO) ||\
+                                          lab126_board_is(BOARD_ID_WHISKY_WAN))
+
+#define LAB126_BOARD_HAS_WAN  (lab126_board_is(BOARD_ID_PINOT) ||\
+                                lab126_board_is(BOARD_ID_PINOT_2GB) ||\
+                                lab126_board_is(BOARD_ID_ICEWINE_WARIO_512) ||\
+                                lab126_board_is(BOARD_ID_MUSCAT_WAN) ||\
+                                lab126_board_is(BOARD_ID_WHISKY_WAN) )
+
+#define CONFIG_BOARD_DISP_TOUCH_LS_IN_MAX77696 \
+			(lab126_board_rev_greater(BOARD_ID_WHISKY_WAN_HVT1) ||\
+			lab126_board_rev_greater(BOARD_ID_WHISKY_WFO_HVT1) ||\
+			lab126_board_rev_greater_eq(BOARD_ID_WOODY_2))
 
 #endif

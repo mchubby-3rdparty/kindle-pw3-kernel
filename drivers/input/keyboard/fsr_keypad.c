@@ -22,7 +22,6 @@
 #include <asm/uaccess.h>
 #include <linux/lab126_fsr.h> //ioctl
 #include <linux/miscdevice.h>
-#include <endian.h>
 #include <linux/firmware.h>
 #include <linux/proc_fs.h>
 #include <linux/completion.h>

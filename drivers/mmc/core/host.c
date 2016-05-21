@@ -248,6 +248,11 @@ static inline void mmc_host_clk_exit(struct mmc_host *host)
 
 #endif
 
+#ifdef CONFIG_FALCON_WRAPPER
+struct mmc_host dummy_mmc0;
+int dummy_index;
+#endif
+
 /**
  *	mmc_alloc_host - initialise the per-host structure.
  *	@extra: sizeof private data structure
@@ -268,6 +273,12 @@ struct mmc_host *mmc_alloc_host(int extra, struct device *dev)
 		return NULL;
 
 	spin_lock(&mmc_host_lock);
+#ifdef CONFIG_FALCON_WRAPPER
+        /*
+         * Allocate id 0 for a dummy device so SDIO remains at mmc1.
+         */
+        err = idr_get_new(&mmc_host_idr, &dummy_mmc0, &dummy_index);
+#endif
 	err = idr_get_new(&mmc_host_idr, host, &host->index);
 	spin_unlock(&mmc_host_lock);
 	if (err)

@@ -381,6 +381,7 @@ struct fsl_otg {
 	struct otg_fsm fsm;
 	struct usb_dr_mmap *dr_mem_map;
 	struct delayed_work otg_event;
+	struct delayed_work clock_balance;
 
 	/*used for usb host */
 	struct work_struct work_wq;
@@ -389,6 +390,7 @@ struct fsl_otg {
 	bool host_first_call;
 
 	int irq;
+	struct regulator* usb_reg;
 };
 
 struct fsl_otg_config {

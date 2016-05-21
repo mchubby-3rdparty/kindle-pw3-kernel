@@ -32,10 +32,18 @@
 #include <linux/mfd/max77696-events.h>
 #include <max77696_registers.h>
 
+#include <linux/delay.h>
+
 #define DRIVER_DESC    "MAX77696 Main Charger Driver"
 #define DRIVER_AUTHOR  "Jayden Cha <jayden.cha@maxim-ic.com>"
 #define DRIVER_NAME    MAX77696_CHARGER_NAME
 #define DRIVER_VERSION MAX77696_DRIVER_VERSION".0"
+
+#ifdef CONFIG_FALCON
+extern int in_falcon(void);
+#endif
+extern int pb_oneshot;
+extern void pb_oneshot_unblock_button_events (void);
 
 #ifdef VERBOSE
 #define dev_noise(args...) dev_dbg(args)
@@ -86,8 +94,9 @@
 #endif /* DEBUG */
 
 #define CHARGE_HISTORY_LEN 20
-#define CHARGE_HISTORY_DEBOUNCE_LIMIT (HZ*2)
+#define CHARGE_HISTORY_DEBOUNCE_LIMIT (HZ/2)
 #define CHARGE_HISTORY_DEBOUNCE_TIMEOUT (HZ*15)
+#define CHARGE_IGNORE_BIG_DELTA (HZ*5)
 
 /* CHGA Register Single Bit Ops */
 struct max77696_charger {
@@ -106,12 +115,15 @@ struct max77696_charger {
 	unsigned int             irq;
 	u8                       irq_unmask;
 	u8                       interrupted;
+	u8                       icl_ilim;
 	bool                     chg_online, chg_enable;
 	bool                     wdt_enabled;
 	unsigned long            wdt_period;
 	struct delayed_work      wdt_work;
 	struct delayed_work      gauge_vmn_work;
 	struct delayed_work      gauge_vmx_work;
+	struct delayed_work      gauge_smn_work;
+	struct delayed_work      gauge_smx_work;
 	struct delayed_work      gauge_tmn_work;
 	struct delayed_work      gauge_tmx_work;
 	unsigned int             gauge_irq;
@@ -126,7 +138,7 @@ struct max77696_charger {
 };
 
 extern int max77696_led_set_manual_mode(unsigned int led_id, bool manual_mode);
-extern int max77696_led_ctrl(unsigned int led_id, bool enable);
+extern int max77696_led_ctrl(unsigned int led_id, int led_state);
 static bool is_charger_a_connected(struct max77696_charger *me);
 static bool is_charger_a_enabled(struct max77696_charger *me);
 static void log_charger_cb_time(struct max77696_charger *me, unsigned long time);
@@ -140,10 +152,20 @@ static unsigned long last_charge_time;
 static bool last_charge_time_set = false;
 
 atomic_t chgina_atomic_detection = ATOMIC_INIT(0);
+atomic_t socbatt_max_subscribed = ATOMIC_INIT(0);
+atomic_t socbatt_min_subscribed = ATOMIC_INIT(0);
+
 struct max77696_charger *g_max77696_charger = NULL;
 static bool chga_disabled_by_user = false;
 static bool chga_disabled_by_debounce = false;
+static bool otg_out_5v = false;
+#if defined(CONFIG_MX6SL_WARIO_BASE)
 static bool green_led_set = false;
+#endif
+#if defined(CONFIG_MX6SL_WARIO_WOODY)
+extern atomic_t soda_usb_charger_connected;
+extern void max77696_gauge_temphi(void);
+#endif
 
 static int max77696_charger_mode_set(struct max77696_charger*, int);
 static int max77696_charger_mode_get(struct max77696_charger*, int*);
@@ -179,9 +201,15 @@ static int max77696_charger_allow_charging_set(struct max77696_charger*, int);
 static int max77696_charger_allow_charging_get(struct max77696_charger*, int*);
 static int max77696_charger_debounce_charging_set(struct max77696_charger*, int);
 static int max77696_charger_debounce_charging_get(struct max77696_charger*, int*);
-static int max77696_charger_soft_disable(struct max77696_charger* me, bool user_disable, bool debounce_disable);
+static int max77696_charger_lpm_set(struct max77696_charger*, bool);
+static int max77696_charger_soft_disable(struct max77696_charger* me, bool user_disable, bool debounce_disable, bool otg);
 static int chg_state_changed(struct max77696_charger *me);
 int max77696_charger_mask(void *obj, u16 event, bool mask_f);
+/* functions to subscribe/unsubscribe SOC battery HI/LOW events */
+int subscribe_socbatt_max(void);
+int subscribe_socbatt_min(void);
+void unsubscribe_socbatt_max(void);
+void unsubscribe_socbatt_min(void);
 
 extern int wario_lobat_event;
 extern int wario_lobat_condition;
@@ -194,13 +222,19 @@ extern int wario_battery_temp_c;
 extern int wario_battery_valid;
 extern void max77696_gauge_lobat(void);
 extern void max77696_gauge_overheat(void);
-extern void gpio_wan_ldo_fet_ctrl(int enable);
+extern void max77696_gauge_sochi_event(void);
+extern void max77696_gauge_soclo_event(void);
 extern int max77696_gauge_driftadj_handler(void);
+#if defined(CONFIG_MX6SL_WARIO_BASE)
+extern void gpio_wan_ldo_fet_ctrl(int enable);
+#endif
 static pmic_event_callback_t fg_lobat_evt;
 static pmic_event_callback_t fg_overvolt_evt;
 static pmic_event_callback_t fg_lotemp_evt;
 static pmic_event_callback_t fg_crittemp_evt;
 static pmic_event_callback_t fg_critbat_evt;
+static pmic_event_callback_t fg_maxsoc_evt;
+static pmic_event_callback_t fg_minsoc_evt;
 static pmic_event_callback_t chg_detect;
 static pmic_event_callback_t chg_status;
 static pmic_event_callback_t thm_status;
@@ -221,7 +255,6 @@ static pmic_event_callback_t thm_status;
 
 #define GAUGE_WORK_DELAY            0
 #define GLBL_CRITBAT_WORK_DELAY     0
-#define CHGA_ICL_ENABLE_0P5A        0x99
 
 #define WARIO_GREEN_LED_THRESHOLD   95 		/* Battery capacity (%) */
 #define WARIO_BAT_EOC_CAP           100	 	/* Battery capacity (%) */
@@ -424,12 +457,36 @@ static void max77696_charger_sysdev_unregister(void)
 }
 
 /*
+ * MAXSOC event callback from PMIC-MAX77696 
+ */
+static void max77696_gauge_maxsoc_cb(void *obj, void *param)
+{
+	printk(KERN_CRIT "KERNEL: I pmic:fg battery capacity::high limit reached soc=%3d%%\n",
+					wario_battery_capacity);
+	max77696_gauge_sochi_event();
+}
+
+/*
+ * MINSOC event callback from PMIC-MAX77696 
+ */
+static void max77696_gauge_minsoc_cb(void *obj, void *param)
+{
+	printk(KERN_CRIT "KERNEL: I pmic:fg battery capacity::low limit reached soc=%3d%%\n",
+					wario_battery_capacity);
+	max77696_gauge_soclo_event();
+}
+
+/*
  * LOTEMP Threshold event callback from PMIC-MAX77696 
  */
 static void max77696_gauge_lotemp_cb(void *obj, void *param)
 {
+#if defined(CONFIG_MX6SL_WARIO_BASE)
 	printk(KERN_CRIT "KERNEL: E pmic:fg battery temp::lowtemp temp=%dC current=%dmA\n",
 					wario_battery_temp_c, wario_battery_current);
+#elif defined(CONFIG_MX6SL_WARIO_WOODY)
+	max77696_gauge_temphi();
+#endif
 }
 
 /*
@@ -508,6 +565,16 @@ static struct max77696_event_handler max77696_fg_lotemp_handle = {
 	.event_id = EVENT_FG_TMN,
 };
 
+static struct max77696_event_handler max77696_fg_maxsoc_handle = {
+	.mask_irq = max77696_fg_mask,
+	.event_id = EVENT_FG_SMX,
+};
+
+static struct max77696_event_handler max77696_fg_minsoc_handle = {
+	.mask_irq = max77696_fg_mask,
+	.event_id = EVENT_FG_SMN,
+};
+
 static struct max77696_event_handler max77696_chgrin_handle = {
     .mask_irq = NULL,
     .event_id = EVENT_SW_CHGRIN,
@@ -567,6 +634,76 @@ out:
 	__unlock(me);
 	return rc;
 }
+
+int subscribe_socbatt_max(void)
+{
+	int rc = -1;
+
+	if(!fg_maxsoc_evt.param || !fg_maxsoc_evt.func) return -EINVAL;
+
+	/* since this is called dynamically and many times, we need to make
+	 * sure that there is only one cb subscribed at any given point
+	 */
+	if(atomic_read(&socbatt_max_subscribed)) {
+		printk(KERN_WARNING "%s: Already subscribed!", __func__);
+		return -EPERM;
+	}
+
+        rc = pmic_event_subscribe(EVENT_FG_SMX, &fg_maxsoc_evt);
+
+	/* set flag to say we have subscribed */
+	if(!likely(rc)) {
+		printk(KERN_INFO "%s: Now subscribed", __func__);
+		atomic_set(&socbatt_max_subscribed, 1);
+	}
+	return rc;
+}
+EXPORT_SYMBOL(subscribe_socbatt_max);
+
+int subscribe_socbatt_min(void)
+{
+	int rc = -1;
+	if(!fg_minsoc_evt.param || !fg_minsoc_evt.func) return -EINVAL;
+
+	if(atomic_read(&socbatt_min_subscribed)) {
+		printk(KERN_WARNING "%s: Already subscribed!", __func__);
+		return -EPERM;
+	}
+
+	rc = pmic_event_subscribe(EVENT_FG_SMN, &fg_minsoc_evt);
+
+	/* set flag to say we have subscribed */
+	if(!likely(rc)) {
+		printk(KERN_INFO "%s: Now subscribed", __func__);
+		atomic_set(&socbatt_min_subscribed, 1);
+	}
+	return rc;
+}
+EXPORT_SYMBOL(subscribe_socbatt_min);
+
+void unsubscribe_socbatt_max(void)
+{
+	if(atomic_read(&socbatt_max_subscribed)) {
+		pmic_event_unsubscribe(EVENT_FG_SMX, &fg_maxsoc_evt);
+		atomic_set(&socbatt_max_subscribed, 0);
+		printk(KERN_INFO "%s: Now unsubscribed", __func__);
+	} else {
+		printk(KERN_WARNING "%s: Already unsubscribed!", __func__);
+	}
+}
+EXPORT_SYMBOL(unsubscribe_socbatt_max);
+
+void unsubscribe_socbatt_min(void)
+{
+	if(atomic_read(&socbatt_min_subscribed)) {
+		pmic_event_unsubscribe(EVENT_FG_SMN, &fg_minsoc_evt);
+		atomic_set(&socbatt_min_subscribed, 0);
+		printk(KERN_INFO "%s: Now unsubscribed", __func__);
+	} else {
+		printk(KERN_WARNING "%s: Already unsubscribed!", __func__);
+	}
+}
+EXPORT_SYMBOL(unsubscribe_socbatt_min);
 
 static void thm_status_cb(void *obj, void *param)
 {
@@ -688,7 +825,7 @@ static int chg_state_changed(struct max77696_charger *me)
 
 	online = CHGA_REG_BITGET(CHG_INT_OK, CHGINA, status);
 	enable = CHGA_REG_BITGET(CHG_INT_OK, CHG,    status);
-	soft_enable = (online && !chga_disabled_by_debounce && !chga_disabled_by_user);
+	soft_enable = (online && !chga_disabled_by_debounce && !chga_disabled_by_user && !otg_out_5v);
 
 	if (soft_enable) {
 		if (atomic_read(&chgina_atomic_detection) == 1) {
@@ -705,14 +842,21 @@ static int chg_state_changed(struct max77696_charger *me)
 		cancel_delayed_work_sync(&(me->gauge_vmn_work));		
 		cancel_delayed_work_sync(&(me->glbl_critbat_work));
 
+#if defined(CONFIG_MX6SL_WARIO_BASE)
 		/* schedule charger monitor */
 		schedule_delayed_work(&(me->charger_monitor_work), msecs_to_jiffies(CHARGER_MON_INIT));
+#endif
 
 		if (wario_lobat_condition) {
 			wario_lobat_event = 0;
 			wario_critbat_event = 0;	
 			wario_lobat_condition = 0;
 			wario_critbat_condition = 0;
+		}
+
+		if(pb_oneshot == HIBER_SUSP) {
+			pb_oneshot = HIBER_CHG_IRQ;
+			pb_oneshot_unblock_button_events();
 		}
 	} else { 
 		if (atomic_read(&chgina_atomic_detection) == 0) {
@@ -724,6 +868,7 @@ static int chg_state_changed(struct max77696_charger *me)
 		printk(KERN_INFO "KERNEL: I pmic:charger chgina::charger disconnected\n");	
 
 		kobject_uevent(me->kobj, KOBJ_REMOVE);	
+#if defined(CONFIG_MX6SL_WARIO_BASE)
 		cancel_delayed_work_sync(&(me->charger_monitor_work));
 
 		if (wario_battery_valid && !chga_disabled_by_user) {
@@ -746,6 +891,7 @@ static int chg_state_changed(struct max77696_charger *me)
 		green_led_set = false;
 		/* Note: Turn gpio LDO control for WAN/4.35V protection */
 		gpio_wan_ldo_fet_ctrl(1);	/* LDO */
+#endif
 	}
 
 	if (unlikely(me->chg_online == online && me->chg_enable == enable)) {
@@ -788,7 +934,18 @@ static void log_charger_cb_time(struct max77696_charger *me, unsigned long time)
 
 	delta = time - last_charge_time;
 	last_charge_time = time;
-
+	
+	/* if delta between charge-discharge is > Ignore delta(5 secs considered
+	 * big enough), then reset the logic as this is not a USB charge-discharge
+         * storm
+	 */
+	if(delta > CHARGE_IGNORE_BIG_DELTA) { 
+		charge_history_saturated = false;
+		charge_history_idx = 0;
+		charge_history_total = 0;
+		memset(charge_history, 0, sizeof(charge_history));
+		return;
+	}
 
 	if (charge_history_saturated) {
 		charge_history_total -= charge_history[charge_history_idx];
@@ -796,15 +953,13 @@ static void log_charger_cb_time(struct max77696_charger *me, unsigned long time)
 	charge_history_total+=delta;
 	charge_history[charge_history_idx] = delta;
 
-
 	charge_history_idx = (charge_history_idx + 1) % CHARGE_HISTORY_LEN;
 	if (charge_history_idx == 0) {
 		charge_history_saturated = true;
 	}
 
-
-	if (charge_history_saturated && 
-		CHARGE_HISTORY_DEBOUNCE_LIMIT*CHARGE_HISTORY_LEN > charge_history_total) {
+	if (charge_history_saturated &&
+		charge_history_total < (CHARGE_HISTORY_DEBOUNCE_LIMIT*CHARGE_HISTORY_LEN)) {
 
 		char *envp[] = {"debounce_charging=1", NULL};
 		kobject_uevent_env(me->kobj, KOBJ_CHANGE, envp);
@@ -813,12 +968,12 @@ static void log_charger_cb_time(struct max77696_charger *me, unsigned long time)
 		charge_history_saturated = false;
 		charge_history_idx = 0;
 		charge_history_total = 0;
+		memset(charge_history, 0, sizeof(charge_history));
 
 		cancel_delayed_work_sync(&(me->charger_debounce_work));
-		max77696_charger_soft_disable(me, chga_disabled_by_user, true);
+		max77696_charger_soft_disable(me, chga_disabled_by_user, true, otg_out_5v);
 		schedule_delayed_work(&(me->charger_debounce_work), CHARGE_HISTORY_DEBOUNCE_TIMEOUT);
 	}
-
 }
 
 static int max77696_charger_lock_config (struct max77696_charger* me,
@@ -879,7 +1034,6 @@ out:
 }
 
 /* Set/read constant current level */
-
 static int max77696_charger_pqen_set (struct max77696_charger* me, int enable)
 {
 	int rc;
@@ -917,6 +1071,32 @@ static int max77696_charger_pqen_get (struct max77696_charger* me, int *enable)
 	}
 
 	*enable = (int)(!!pqsel);
+
+out:
+	max77696_charger_lock_config(me, CHGA_CHG_CNFG_01_REG, 1);
+	return rc;
+}
+
+/* Set fast charge timer duration */
+static int max77696_charger_fast_chg_timer_set (struct max77696_charger* me, int time)
+{
+	int rc;
+	u8 fchg_time = 0;
+
+	if (time) {
+		fchg_time = ((time / 2) - 1);
+	}
+
+	rc = max77696_charger_lock_config(me, CHGA_CHG_CNFG_01_REG, 0);
+	if (unlikely(rc)) {
+		return rc;
+	}
+
+	rc = max77696_charger_reg_set_bit(me, CHG_CNFG_01, FCHGTIME, fchg_time);
+	if (unlikely(rc)) {
+		dev_err(me->dev, "CHG_CNFG_01 write error [%d]\n", rc);
+		goto out;
+	}
 
 out:
 	max77696_charger_lock_config(me, CHGA_CHG_CNFG_01_REG, 1);
@@ -1427,19 +1607,34 @@ int max77696_charger_wdt_period_get (struct max77696_charger* me,
 /*
  * Configure the two potential software charging disable events (user and debounce)
  */
-static int max77696_charger_soft_disable(struct max77696_charger* me, bool usr_disable, bool debounce_disable)
+static int max77696_charger_soft_disable(struct max77696_charger* me, bool usr_disable, bool debounce_disable, bool otg_mode)
 {
 	int rc = 0;
-
+	int retry = 5;
 	chga_disabled_by_user = usr_disable;
 	chga_disabled_by_debounce = debounce_disable;
+	otg_out_5v = otg_mode;
 
-	if (!chga_disabled_by_user && !chga_disabled_by_debounce) {
+	if (otg_out_5v) {
+		/*vbus can be noisy and affect i2c, retry to make sure this packet is going through*/
+		do {
+			rc = max77696_charger_mode_set(me, MAX77696_CHARGER_MODE_OTG);
+			if (unlikely(rc)) {
+				dev_err(me->dev, "%s: error charger mode ctrli for otg (CHG) [%d] USB noise?\n", __func__, rc);
+				msleep(100);
+			}
+		}while(rc && retry-- > 0);
+
+		if(unlikely(rc))
+			goto out;
+
+	} else if (!chga_disabled_by_user && !chga_disabled_by_debounce) {
 		rc = max77696_charger_mode_set(me, MAX77696_CHARGER_MODE_CHG);		/* ChargerA = ON */
 		if (unlikely(rc)) {
 			dev_err(me->dev, "%s: error charger mode ctrl (CHG) [%d]\n", __func__, rc);
 			goto out;
 		}
+#if defined(CONFIG_MX6SL_WARIO_BASE)
 		/* set LED's to auto mode */
 		rc = max77696_led_set_manual_mode(MAX77696_LED_AMBER, false);
 		if (unlikely(rc)) {
@@ -1451,12 +1646,23 @@ static int max77696_charger_soft_disable(struct max77696_charger* me, bool usr_d
 			dev_err(me->dev, "%s: error led mode ctrl (green) [%d]\n", __func__, rc);
 			goto out;
 		}
+#elif defined(CONFIG_MX6SL_WARIO_WOODY)
+		if (atomic_read(&soda_usb_charger_connected)) {
+			/* TURN ON LED's - manual mode */
+			rc = max77696_led_ctrl(MAX77696_LED_AMBER, MAX77696_LED_ON);
+			if (unlikely(rc)) { 
+				dev_err(me->dev, "%s: error led ctrl (amber) [%d]\n", __func__, rc);
+				goto out;
+			}
+		}
+#endif
 	} else {
 		rc = max77696_charger_mode_set(me, MAX77696_CHARGER_MODE_OFF);
 		if (unlikely(rc)) {
 			dev_err(me->dev, "%s: error charger mode ctrl (OFF) [%d]\n", __func__, rc);
 			goto out;
 		}
+
 		/* TURN OFF LED's - manual mode */
 		rc = max77696_led_ctrl(MAX77696_LED_AMBER, MAX77696_LED_OFF);
 		if (unlikely(rc)) { 
@@ -1468,7 +1674,9 @@ static int max77696_charger_soft_disable(struct max77696_charger* me, bool usr_d
 			dev_err(me->dev, "%s: error led ctrl (green) [%d]\n", __func__, rc);
 			goto out;
 		}
+#if defined(CONFIG_MX6SL_WARIO_BASE)
 		green_led_set = false;
+#endif
 	}
 out:
 	return chg_state_changed(me);
@@ -1492,8 +1700,13 @@ static int max77696_charger_charging_get (struct max77696_charger *me, int *enab
 }
 
 static int max77696_charger_allow_charging_set (struct max77696_charger *me, int enable) {
-	return max77696_charger_soft_disable(me, !enable, chga_disabled_by_debounce);
+	return max77696_charger_soft_disable(me, !enable, chga_disabled_by_debounce, otg_out_5v);
 }
+
+int max77696_charger_set_otg(int enable) {
+	return max77696_charger_soft_disable(g_max77696_charger, chga_disabled_by_user, chga_disabled_by_debounce, enable);
+}
+EXPORT_SYMBOL(max77696_charger_set_otg);
 
 static int max77696_charger_allow_charging_get (struct max77696_charger *me, int *enable) {
 	*enable = !chga_disabled_by_user;
@@ -1503,7 +1716,7 @@ static int max77696_charger_allow_charging_get (struct max77696_charger *me, int
 static int max77696_charger_debounce_charging_set (struct max77696_charger *me, int enable) {
 	//Only allow the sys entry to turn debounce detection off (and re-enable charging)
 	if (!enable) {
-		return max77696_charger_soft_disable(me, chga_disabled_by_user, false);
+		return max77696_charger_soft_disable(me, chga_disabled_by_user, false, otg_out_5v);
 	}
 	return 0;
 }
@@ -1511,6 +1724,18 @@ static int max77696_charger_debounce_charging_set (struct max77696_charger *me, 
 static int max77696_charger_debounce_charging_get(struct max77696_charger *me, int *enable) {
 	*enable = chga_disabled_by_debounce;
 	return 0;
+}
+
+static int max77696_charger_lpm_set(struct max77696_charger* me, bool enable) 
+{
+	int rc = 0;
+
+	rc = max77696_charger_reg_set_bit(me, CHG_CNFG_12, CHG_LPM, enable ? 1 : 0);
+	if (unlikely(rc)) {
+		dev_err(me->dev, "CHG_CNFG_12 write error [%d]\n", rc);
+	}
+
+	return rc;
 }
 
 static bool is_charger_a_connected(struct max77696_charger *me)
@@ -1600,6 +1825,24 @@ static void max77696_gauge_vmx_work(struct work_struct *work)
 	return;
 }
 
+static void max77696_gauge_smn_work(struct work_struct *work)
+{
+	struct max77696_charger *me = container_of(work, struct max77696_charger, gauge_smn_work.work);
+
+	/* Invoke all cb's for soc min battery event */
+	pmic_event_callback(ENCODE_EVENT((me->gauge_irq - me->chip->irq_base), MAX77696_FG_INT_SMN));
+	return;
+}
+
+static void max77696_gauge_smx_work(struct work_struct *work)
+{
+	struct max77696_charger *me = container_of(work, struct max77696_charger, gauge_smx_work.work);
+
+	/* Invoke all cb's for soc max battery event */
+	pmic_event_callback(ENCODE_EVENT((me->gauge_irq - me->chip->irq_base), MAX77696_FG_INT_SMX));
+	return;
+}
+
 static void max77696_gauge_tmn_work(struct work_struct *work)
 {
 	struct max77696_charger *me = container_of(work, struct max77696_charger, gauge_tmn_work.work);
@@ -1626,6 +1869,11 @@ static irqreturn_t max77696_gauge_isr (int irq, void *data)
 	/* read INT register to clear bits ASAP */
 	max77696_irq_read_fgirq_status(&interrupted);
 	dev_dbg(me->dev, "FG_INT %02X\n", interrupted);
+#if defined(CONFIG_FALCON) && !defined(DEBUG)
+	if(in_falcon()){
+		printk(KERN_DEBUG "FG_INT %02X\n", interrupted);
+	}
+#endif
 
 	if (interrupted & MAX77696_FG_INT_VMN) {
 		schedule_delayed_work(&(me->gauge_vmn_work), msecs_to_jiffies(GAUGE_WORK_DELAY));
@@ -1633,6 +1881,14 @@ static irqreturn_t max77696_gauge_isr (int irq, void *data)
 
 	if (interrupted & MAX77696_FG_INT_VMX) {
 		schedule_delayed_work(&(me->gauge_vmx_work), msecs_to_jiffies(GAUGE_WORK_DELAY));
+	}
+
+	if (interrupted & MAX77696_FG_INT_SMN) {
+		schedule_delayed_work(&(me->gauge_smn_work), msecs_to_jiffies(GAUGE_WORK_DELAY));
+	}
+
+	if (interrupted & MAX77696_FG_INT_SMX) {
+		schedule_delayed_work(&(me->gauge_smx_work), msecs_to_jiffies(GAUGE_WORK_DELAY));
 	}
 
 	if (interrupted & MAX77696_FG_INT_TMN) {
@@ -1695,9 +1951,10 @@ static void max77696_charger_thmsts_work (struct work_struct *work)
 static void max77696_charger_debounce_timeout(struct work_struct *work)
 {
 	struct max77696_charger *me = container_of(work, struct max77696_charger, charger_debounce_work.work);
-	max77696_charger_soft_disable(me, chga_disabled_by_user, false);
+	max77696_charger_soft_disable(me, chga_disabled_by_user, false, otg_out_5v);
 }
 
+#if defined(CONFIG_MX6SL_WARIO_BASE)
 static void max77696_charger_monitor_work(struct work_struct *work)
 {
 	int rc = 0;
@@ -1745,6 +2002,7 @@ retry:
 	schedule_delayed_work(&(me->charger_monitor_work), msecs_to_jiffies(CHARGER_MON_RUN));
 	return;
 }
+#endif
 
 static irqreturn_t max77696_charger_isr (int irq, void *data)
 {
@@ -1753,6 +2011,11 @@ static irqreturn_t max77696_charger_isr (int irq, void *data)
 	/* read INT register to clear bits ASAP */
 	max77696_charger_reg_read(me, CHG_INT, &(me->interrupted));
 	dev_dbg(me->dev, "CHG_INT %02X EN %02X\n", me->interrupted, me->irq_unmask);
+#if defined(CONFIG_FALCON) && !defined(DEBUG)
+	if(in_falcon()){
+		printk(KERN_DEBUG "CHG_INT %02X EN %02X\n", me->interrupted, me->irq_unmask);
+	}
+#endif
 
 	if (me->interrupted & CHGA_INT_CHGINA) {
 		__show_details(me, 0, CHGINA);
@@ -1853,12 +2116,16 @@ static __devinit int max77696_charger_probe (struct platform_device *pdev)
 	INIT_DELAYED_WORK(&(me->chgina_work), max77696_charger_chgina_work);
 	INIT_DELAYED_WORK(&(me->chgsts_work), max77696_charger_chgsts_work);
 	INIT_DELAYED_WORK(&(me->thmsts_work), max77696_charger_thmsts_work);
+#if defined(CONFIG_MX6SL_WARIO_BASE)
 	INIT_DELAYED_WORK(&(me->charger_monitor_work), max77696_charger_monitor_work);
+#endif
 	INIT_DELAYED_WORK(&(me->charger_debounce_work), max77696_charger_debounce_timeout);
 	INIT_DELAYED_WORK(&(me->wdt_work), max77696_charger_wdt_work);
 	INIT_DELAYED_WORK(&(me->gauge_vmn_work), max77696_gauge_vmn_work);
 	INIT_DELAYED_WORK(&(me->glbl_critbat_work), max77696_glbl_critbat_work);
 	INIT_DELAYED_WORK(&(me->gauge_vmx_work), max77696_gauge_vmx_work);
+	INIT_DELAYED_WORK(&(me->gauge_smn_work), max77696_gauge_smn_work);
+	INIT_DELAYED_WORK(&(me->gauge_smx_work), max77696_gauge_smx_work);
 	INIT_DELAYED_WORK(&(me->gauge_tmn_work), max77696_gauge_tmn_work);
 	INIT_DELAYED_WORK(&(me->gauge_tmx_work), max77696_gauge_tmx_work);
 	INIT_DELAYED_WORK(&(me->gauge_driftadj_work), max77696_gauge_driftadj_work);
@@ -1874,10 +2141,15 @@ static __devinit int max77696_charger_probe (struct platform_device *pdev)
 	max77696_charger_cv_jta_set(me, pdata->cv_jta_mV);
 	max77696_charger_to_time_set(me, pdata->to_time);
 	max77696_charger_to_ith_set(me, pdata->to_ith);
+	max77696_charger_fast_chg_timer_set(me, pdata->fast_chg_time);
 	max77696_charger_t1_set(me, pdata->t1_C);
 	max77696_charger_t2_set(me, pdata->t2_C);
 	max77696_charger_t3_set(me, pdata->t3_C);
 	max77696_charger_t4_set(me, pdata->t4_C);
+	if (pdata->chg_dc_lpm)
+		max77696_charger_lpm_set(me, pdata->chg_dc_lpm);
+
+	me->icl_ilim = pdata->icl_ilim;
 
 	/* Disable all charger interrupts */
 	max77696_charger_disable_irq(me, 0xFF, 1);
@@ -1962,6 +2234,20 @@ static __devinit int max77696_charger_probe (struct platform_device *pdev)
 		dev_err(me->dev, "failed to register event[%d] handle with err [%d]\n", \
 				max77696_fg_lotemp_handle.event_id, rc);
 		goto out_err_reg_lotemp_handler;	
+	}
+
+	rc = max77696_eventhandler_register(&max77696_fg_maxsoc_handle, me);
+	if (unlikely(rc)) {
+		dev_err(me->dev, "failed to register event[%d] handle with err [%d]\n", \
+				max77696_fg_maxsoc_handle.event_id, rc);
+		goto out_err_reg_maxsoc_handler;	
+	}
+
+	rc = max77696_eventhandler_register(&max77696_fg_minsoc_handle, me);
+	if (unlikely(rc)) {
+		dev_err(me->dev, "failed to register event[%d] handle with err [%d]\n", \
+				max77696_fg_minsoc_handle.event_id, rc);
+		goto out_err_reg_minsoc_handler;	
 	}
 
 	rc = max77696_eventhandler_register(&max77696_chgrin_handle, me);
@@ -2064,7 +2350,16 @@ static __devinit int max77696_charger_probe (struct platform_device *pdev)
 		goto out_err_sub_lotemp;
 	}
 
-	BUG_ON(chip->chg_ptr);
+#if defined(CONFIG_POWER_SODA)
+	/* For Whisky-Soda Duet arch, 
+         * init params for SOC Batt Hi and Low handlers */
+        fg_maxsoc_evt.param = me;
+	fg_maxsoc_evt.func = max77696_gauge_maxsoc_cb;
+
+	fg_minsoc_evt.param = me;
+	fg_minsoc_evt.func = max77696_gauge_minsoc_cb;
+#endif
+
 	BUG_ON(chip->chg_ptr);
 	chip->chg_ptr = me;
 	g_max77696_charger = me;
@@ -2096,6 +2391,10 @@ out_err_req_lobat_irq:
 out_err_reg_chgrout_handler:
 	max77696_eventhandler_unregister(&max77696_chgrin_handle);
 out_err_reg_chgrin_handler:
+	max77696_eventhandler_unregister(&max77696_fg_minsoc_handle);
+out_err_reg_minsoc_handler:
+	max77696_eventhandler_unregister(&max77696_fg_maxsoc_handle);
+out_err_reg_maxsoc_handler:
 	max77696_eventhandler_unregister(&max77696_fg_lotemp_handle);
 out_err_reg_lotemp_handler:
 	max77696_eventhandler_unregister(&max77696_fg_crittemp_handle);
@@ -2130,6 +2429,8 @@ static __devexit int max77696_charger_remove (struct platform_device *pdev)
 	me->chip->chg_ptr = NULL;
 
 	/* Unsubscribe - events */
+	unsubscribe_socbatt_min();
+	unsubscribe_socbatt_max();
 	pmic_event_unsubscribe(EVENT_FG_TMN, &fg_lotemp_evt);
 	pmic_event_unsubscribe(EVENT_FG_TMX, &fg_crittemp_evt);
 	pmic_event_unsubscribe(EVENT_FG_VMX, &fg_overvolt_evt);
@@ -2144,6 +2445,8 @@ static __devexit int max77696_charger_remove (struct platform_device *pdev)
 
 	cancel_delayed_work_sync(&(me->gauge_vmn_work));
 	cancel_delayed_work_sync(&(me->gauge_vmx_work));		
+	cancel_delayed_work_sync(&(me->gauge_smn_work));
+	cancel_delayed_work_sync(&(me->gauge_smx_work));		
 	cancel_delayed_work_sync(&(me->gauge_tmn_work));		
 	cancel_delayed_work_sync(&(me->gauge_tmx_work));		
 	free_irq(me->gauge_irq, me);
@@ -2153,6 +2456,8 @@ static __devexit int max77696_charger_remove (struct platform_device *pdev)
 	max77696_eventhandler_unregister(&max77696_fg_crittemp_handle);
 	max77696_eventhandler_unregister(&max77696_fg_overvolt_handle);
 	max77696_eventhandler_unregister(&max77696_fg_lobat_handle);
+	max77696_eventhandler_unregister(&max77696_fg_minsoc_handle);
+	max77696_eventhandler_unregister(&max77696_fg_maxsoc_handle);
 	max77696_eventhandler_unregister(&max77696_chgrin_handle);
 	max77696_eventhandler_unregister(&max77696_chgrout_handle);
 	max77696_eventhandler_unregister(&max77696_thmsts_handle);
@@ -2163,7 +2468,9 @@ static __devexit int max77696_charger_remove (struct platform_device *pdev)
 	cancel_delayed_work_sync(&(me->chgina_work));
 	cancel_delayed_work_sync(&(me->chgsts_work));
 	cancel_delayed_work_sync(&(me->thmsts_work));
+#if defined(CONFIG_MX6SL_WARIO_BASE)
 	cancel_delayed_work_sync(&(me->charger_monitor_work));
+#endif
 	cancel_delayed_work_sync(&(me->gauge_driftadj_work));
 	cancel_delayed_work_sync(&(me->charger_debounce_work));
 
@@ -2183,13 +2490,18 @@ static int max77696_charger_suspend (struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct max77696_charger *me = platform_get_drvdata(pdev);
-
+#if defined(CONFIG_MX6SL_WARIO_BASE)
 	gpio_wan_ldo_fet_ctrl(0);	/* FET */
+#endif
 
 	cancel_delayed_work_sync(&(me->gauge_vmn_work));		
 	cancel_delayed_work_sync(&(me->glbl_critbat_work));
+#if defined(CONFIG_MX6SL_WARIO_BASE)
 	cancel_delayed_work_sync(&(me->charger_monitor_work));
+#endif
 	cancel_delayed_work_sync(&(me->gauge_vmx_work));		
+	cancel_delayed_work_sync(&(me->gauge_smn_work));		
+	cancel_delayed_work_sync(&(me->gauge_smx_work));		
 	cancel_delayed_work_sync(&(me->gauge_tmn_work));		
 	cancel_delayed_work_sync(&(me->gauge_tmx_work));		
 	cancel_delayed_work_sync(&(me->gauge_driftadj_work));
@@ -2207,8 +2519,9 @@ static int max77696_charger_resume (struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct max77696_charger *me = platform_get_drvdata(pdev);
-
+#if defined(CONFIG_MX6SL_WARIO_BASE)
 	gpio_wan_ldo_fet_ctrl(1);	/* LDO */
+#endif
 
 	if (likely(device_may_wakeup(dev))) {
 		disable_irq_wake(me->irq);
@@ -2248,6 +2561,19 @@ module_exit(max77696_charger_driver_exit);
 
 extern struct max77696_chip* max77696;
 
+int max77696_charger_dc_dc_lpm (bool enable)
+{
+	struct max77696_chip *chip = max77696;
+	struct max77696_charger *me = chip->chg_ptr;
+	int rc;
+
+	__lock(me);
+	rc = max77696_charger_lpm_set(me, enable);
+	__unlock(me);
+	return rc;
+}
+EXPORT_SYMBOL(max77696_charger_dc_dc_lpm);
+
 /* Set Charger-A ICL  */
 int max77696_charger_set_icl (void)
 {
@@ -2257,7 +2583,7 @@ int max77696_charger_set_icl (void)
 
 	__lock(me);
 
-	rc = max77696_charger_reg_write(me, CHG_CNFG_09, CHGA_ICL_ENABLE_0P5A);
+	rc = max77696_charger_reg_write(me, CHG_CNFG_09, me->icl_ilim);
 	if (unlikely(rc)) {
 		dev_err(me->dev, "CHG_CNFG_09 write error [%d]\n", rc);
 	}
@@ -2271,7 +2597,7 @@ int max77696_charger_set_mode (int mode)
 {
 	struct max77696_chip *chip = max77696;
 	struct max77696_charger *me = chip->chg_ptr;
-	int rc;
+	int rc = 0;
 
 	__lock(me);
 	rc = max77696_charger_mode_set(me, mode);

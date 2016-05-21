@@ -502,6 +502,18 @@ config UEVENT_SHRINKER
 	  Propagate uevents up as the kernel calls upon shrinkers to drop cache
 	  so user caches can also be dropped to provide longer term relief.
 
+config BLUETOOTH_PWRCTRL
+	tristate "Amazon Bluetooth Power Control driver"
+	depends on ARCH_MX6
+	default n
+	help
+	  This driver is serves as power control driver for any 3rd party
+	  Bluetooth module in Amazon products. The driver power controls the 
+	  Bluetooth chip and also performs actions corresponding to power
+	  optimisations done for Amazon consumer products.
+          This driver is designed to have minimal dependency on SoC, so that
+          it can be ported easily across different platforms
+
 source "drivers/misc/c2port/Kconfig"
 source "drivers/misc/eeprom/Kconfig"
 source "drivers/misc/cb710/Kconfig"

@@ -124,4 +124,6 @@ obj-y				+= clk/
 
 obj-$(CONFIG_HWSPINLOCK)	+= hwspinlock/
 
+obj-$(CONFIG_FALCON_DRV)        += falcon/
+
 
